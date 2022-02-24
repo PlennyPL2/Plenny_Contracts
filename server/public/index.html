@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Plenny DLSP</title>
+    <link href="./favicon.ico" rel="shortcut icon" type="image/jpg"/>
+    <link href="//maxcdn.bootstrapcdn.com/bootstrap/3.3.1/css/bootstrap.min.css" rel="stylesheet">
+    <link href="styles/style.css" rel="stylesheet">
+    <style>
+        body {
+            padding-top: 50px;
+        }
+    </style>
+</head>
+
+<body>
+<div class="container">
+    <div class="jumbotron">
+        <h1>Plenny DLSP</h1>
+
+        <div class="description">
+            <p>Plenny DLSP refers to the multifunctional open-source software for providing the decentralized lightning
+                services of the Dapp and the DON in order to process transaction data off-chain.
+                This add-on module for lightning nodes supports both, Lightning Oracles and Liquidity Makers.
+            </p>
+
+            <p>
+                Lightning Oracles and Liquidity Makers download and install the same open-source software to operate
+                as Plenny DLSPs. This specifically designed add-on module supports processing data off-chain for the
+                provision of services over the DON and the capacity market. For integration, lightning nodes install an
+                executable application and configure the tool on their device. Depending on the configuration, the service
+                level and user type are recognized when connecting with the Dapp. Participating in the DON to operate as an
+                oracle validator is permission-less, and so is the participation in the capacity market to operate as a
+                Liquidity Maker. Any lightning node can run a Plenny DLSP.
+            </p>
+
+            <p>
+                Participating lightning nodes operating as Plenny DLSP improve economics for potential fee income in
+                Satoshi (sat) while earning additional income in Plenny (PL2) over DeFi. Operating as a Plenny DLSP
+                involves the use of both, sat and PL2.
+            </p>
+            <p>
+                In order to operate as a Plenny DLSP, lightning nodes must first complete the initial verification.
+            </p>
+
+            <p>
+                The ETH_Wallet that is used from the DLSP should NOT be used for any other transactions
+                (e.g on DEXes or other Dapps) to avoid nonce errors.
+            </p>
+
+            <p>
+                Plenny is reachable over HTTPS for secure communication. If you don't have an SSL certificate installed
+                on your endpoint for the Decentralized Oracle Network (DON), you'll have to use HTTP to access it.
+                As a result, all standard web browsers will reject this access and classify it as "unsafe".
+                Moreover, Plenny will receive an error and respond accordingly. This issue is classified as
+                "Mixed Content Warnings" over the web browser.
+            </p>
+
+            <p>
+                Make sure your endpoint for the DON is accessible through HTTPS to avoid this issue. You can use
+                commercial or free SSL certificates. The SSL configurations listed below can be used:
+            <ul>
+                <li>
+                    Using a Proxy webserver [Examples : HAProxy, Nginx]
+                </li>
+                <li>
+                    Cloud load balancer with Cloud provider's SSL [For cloud-hosted Decentralized Oracle Network]
+                </li>
+                <li>
+                    Dockerised solution using docker-compose [nginx server with Let’s Encrypt]
+                </li>
+            </ul>
+            </p>
+
+            <p>
+                Liquidity Makers utilize a specifically designed add-on module that supports processing data off-chain.
+                This feature enables Lightning Nodes to participate in Plenny's capacity market as so-called DLSP and at
+                the same time to operate independently via the LN. For integration, lightning nodes install an executable
+                application to run the pre-configured software on their device. Any lightning node can download the
+                open-source software and connect. Participating in the capacity market and operating as an LM is
+                permission-less.
+            </p>
+
+            <p>
+                Plenny DLSP latest release and installation manual can be found here:
+                <a href="https://github.com/PlennyPL2/Decentralized-Lightning-Service-Provider_DLSP">
+                    Plenny DLSP Releases
+                </a>
+            </p>
+        </div>
+    </div>
+    <div class="jumbotron">
+        <h1>API</h1>
+        <div class="table-div">
+            <table>
+                <thead>
+                <tr>
+                    <td>Method</td>
+                    <td>URL</td>
+                    <td>Description</td>
+                </tr>
+                </thead>
+                <tbody>
+                <!-- GET -->
+                <tr>
+                    <td class="cell__method cell__method--get">GET</td>
+                    <td>/</td>
+                    <td>Plenny DLSP API-landing page.</td>
+                </tr>
+                <tr>
+                    <td class="cell__method cell__method--get">GET</td>
+                    <td>/lndInfo</td>
+                    <td>Get LND info.</td>
+                </tr>
+                <tr>
+                    <td class="cell__method cell__method--get">GET</td>
+                    <td>/walletbalance</td>
+                    <td>Get LND wallet balance.</td>
+                </tr>
+                <tr>
+                    <td class="cell__method cell__method--get">GET</td>
+                    <td>/healthcheck</td>
+                    <td>Periodically test the health of the service.</td>
+                </tr>
+                <tr>
+                    <td class="cell__method cell__method--get">GET</td>
+                    <td>/restart</td>
+                    <td>Restarts the Plenny DLSP.</td>
+                </tr>
+                <!-- POST -->
+                <tr>
+                    <td class="cell__method cell__method--post">POST</td>
+                    <td>/relayChannelOpening</td>
+                    <td>Relays the channel opening - meta transaction.</td>
+                </tr>
+                <tr>
+                    <td class="cell__method cell__method--post">POST</td>
+                    <td>/signChannelOpening</td>
+                    <td>Elected validators sign the channel opening transaction.</td>
+                </tr>
+                <tr>
+                    <td class="cell__method cell__method--post">POST</td>
+                    <td>/signChannelClosing</td>
+                    <td>Elected validators sign the channel closing transaction.</td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+</body>
+
+</html>

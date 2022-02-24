@@ -1,0 +1,58 @@
+/* TYPOGRAPHY */
+h1,
+h2,
+h3,
+h4,
+h5,
+p {
+    font-family: helvetica, serif;
+    color: #3e3e3e;
+}
+
+.description p, .description ul li {
+    font-size: 14px;
+    color: #656565;
+    text-align: justify;
+}
+
+/* TABLE */
+table {
+    width: 100%;
+    overflow-wrap: break-word;
+    border-spacing: 10px;
+    border-collapse: separate;
+}
+
+table thead tr {
+    font-size: 2rem;
+    font-weight: bold;
+}
+
+tbody:before {
+    content: "@";
+    display: block;
+    line-height: 10px;
+    text-indent: -99999px;
+}
+
+td {
+    padding: 10px;
+}
+
+.cell {
+    padding: 10px;
+}
+
+.cell__method {
+    font-size: 1.5rem;
+}
+
+.cell__method--get {
+    background-color: #01ff002e;
+}
+
+.cell__method--post {
+    background-color: #00a1ff2e;
+}
+
+
