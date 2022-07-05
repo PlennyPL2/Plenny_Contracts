@@ -13,6 +13,7 @@ id: PlennyDaoStorage
 ### `votingDuration()`
 ### `minQuorum()`
 ### `proposalThreshold()`
+### `governorThreshold()`
 ### `DOMAIN_TYPEHASH()`
 ### `BALLOT_TYPEHASH()`
 ### `queuedTransactions()`

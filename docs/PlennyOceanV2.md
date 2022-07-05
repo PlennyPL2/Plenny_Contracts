@@ -40,6 +40,15 @@ Adds/registers a new maker in the ocean. A maker needs to have a previously veri
 
 
 
+### `removeMaker()` (external)
+
+Removes an existing maker from the ocean.
+
+
+
+
+
+
 ### `requestLightningCapacity(string nodeUrl, uint256 capacity, address payable makerAddress, address payable owner, uint256 nonce, bytes signature)` (external)
 
 Called by the maker whenever there is a new request for channel capacity signed by the taker.
@@ -152,6 +161,28 @@ Changes the taker Fee. Called by the owner
 
 
 
+### `setMakerCapacityOneTimeReward(uint256 value)` (external)
+
+Changes the Maker Fixed Royalty. Called by the owner
+
+
+
+
+- `value`: fee
+
+
+
+### `setMakerRewardFee(uint256 value)` (external)
+
+Changes the Maker Reward Fee. Called by the owner
+
+
+
+
+- `value`: fee
+
+
+
 ### `getCapacityRequestPerMaker(address addr) → uint256[]` (external)
 
 Gets the ids of liquidity requests for the given maker address.
@@ -199,6 +230,12 @@ An event emitted when logging function calls.
 ### `MakerAdded(address account, bool created)`
 
 An event emitted when Liquidity Maker is added.
+
+
+
+### `MakerRemoved(address account)`
+
+An event emitted when Liquidity Maker is removed.
 
 
 

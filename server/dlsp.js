@@ -1,17 +1,17 @@
 // Import Libraries
 const _ = require('lodash');
 const path = require('path');
-const Web3 = require('web3');
 const axios = require('axios');
 const https = require('https');
 const cron = require('node-cron');
 const contract = require("truffle-contract");
 const HDWalletProvider = require('truffle-hdwallet-provider');
+const {createAlchemyWeb3} = require("@alch/alchemy-web3");
 
 // Import contracts ABI's
 const PlennyOceanJSON = require(path.join(__dirname, '../build/contracts/PlennyOceanV2.json'));
 const PlennyDappFactoryJSON = require(path.join(__dirname, '../build/contracts/PlennyDappFactoryV2.json'));
-const PlennyCoordinatorJSON = require(path.join(__dirname, '../build/contracts/PlennyCoordinator.json'));
+const PlennyCoordinatorJSON = require(path.join(__dirname, '../build/contracts/PlennyCoordinatorV2.json'));
 const PlennyOracleValidatorJSON = require(path.join(__dirname, '../build/contracts/PlennyOracleValidatorV2.json'));
 const PlennyValidatorElectionJSON = require(path.join(__dirname, '../build/contracts/PlennyValidatorElectionV2.json'));
 
@@ -22,89 +22,112 @@ const db = require('./database/db');
 const {logger} = require('./utils/logger');
 const {BadRequest} = require('./utils/errors');
 
-// Wallet provider
+// Custom Wallet provider
 const privateKeyProvider = new HDWalletProvider(process.env.ETH_PRIV_KEY, process.env.LOCAL_RPC_URL);
-const webSocketProvider = new Web3.providers.WebsocketProvider(process.env.SOCKET_RPC_URL);
 
-// Average daily block count
-const ALLOW_AUTO_RESTART = process.env.ALLOW_AUTO_RESTART;
-const RESTART_INTERVAL_SECONDS = process.env.RESTART_INTERVAL_SECONDS ? process.env.RESTART_INTERVAL_SECONDS : 3600;
-const AVERAGE_DAILY_BLOCK_COUNT = process.env.AVERAGE_DAILY_BLOCK_COUNT ? process.env.AVERAGE_DAILY_BLOCK_COUNT : 6500;
+// Allow closing sub-marginal (profitless) channels.
+const ALLOW_AUTO_CLOSING_CHANNELS = process.env.ALLOW_AUTO_CLOSING_CHANNELS;
+const CHANNEL_FAILED_ATTEMPTS_LIMIT = process.env.CHANNEL_FAILED_ATTEMPTS_LIMIT || 3;
+const DELAY_CHANNEL_PROCESSING = process.env.DELAY_CHANNEL_PROCESSING || 1000;
+const MAX_RETRIES = process.env.MAX_RETRIES ? process.env.MAX_RETRIES : 3;
+const RETRY_INTERVAL = process.env.RETRY_INTERVAL ? process.env.RETRY_INTERVAL : 1000;
+const RETRY_JITTER = process.env.RETRY_JITTER ? process.env.RETRY_JITTER : 250;
 
 // Validator & Maker
 class Dlsp {
 
     constructor() {
-        // set props normally
-        // nothing async can go here
-        this.web3 = new Web3(privateKeyProvider);
+        this.web3 = createAlchemyWeb3(process.env.LOCAL_RPC_URL,
+            {
+                writeProvider: privateKeyProvider,
+                maxRetries: MAX_RETRIES,
+                retryInterval: RETRY_INTERVAL,
+                retryJitter: RETRY_JITTER
+            }
+        );
 
-        this.pendingChannelTimers = new Map();
-        this.activeChannelTimers = new Map();
-        this.pendingCapacityTimers = new Map();
+        this.web3L1 = createAlchemyWeb3(process.env.L1_RPC_URL,
+            {
+                writeProvider: privateKeyProvider,
+                maxRetries: MAX_RETRIES,
+                retryInterval: RETRY_INTERVAL,
+                retryJitter: RETRY_JITTER
+            }
+        );
+
+        this.webWS = createAlchemyWeb3(process.env.SOCKET_RPC_URL,
+            {
+                writeProvider: privateKeyProvider,
+                maxRetries: MAX_RETRIES,
+                retryInterval: RETRY_INTERVAL,
+                retryJitter: RETRY_JITTER
+            }
+        );
+
+        this.pendingChannelIndexes = [];
+        this.activeChannelIndexes = [];
+        this.pendingCapacityIndexes = [];
     }
 
     async init() {
-        // Get accounts
         this.accounts = await this.web3.eth.getAccounts();
-
-        // Get contract websocket instances
-        const [oceanWs, escrowWs, dappFactoryWs, oracleValidatorWs, validatorElectionWS] = await Promise.all([
-            this._setContractProvider(PlennyOceanJSON, webSocketProvider),
-            this._setContractProvider(PlennyCoordinatorJSON, webSocketProvider),
-            this._setContractProvider(PlennyDappFactoryJSON, webSocketProvider),
-            this._setContractProvider(PlennyOracleValidatorJSON, webSocketProvider),
-            this._setContractProvider(PlennyValidatorElectionJSON, webSocketProvider)
+        // Get contract websocket and http instances
+        const [
+            oceanWs, escrowWs, oracleValidatorWs, validatorElectionWS,
+            ocean, coordinator, dappFactory, oracleValidator, validatorElection
+        ] = await Promise.all([
+            this._setContractProvider(PlennyOceanJSON, this.webWS.currentProvider),
+            this._setContractProvider(PlennyCoordinatorJSON, this.webWS.currentProvider),
+            this._setContractProvider(PlennyOracleValidatorJSON, this.webWS.currentProvider),
+            this._setContractProvider(PlennyValidatorElectionJSON, this.webWS.currentProvider),
+            this._setContractProvider(PlennyOceanJSON, this.web3.currentProvider),
+            this._setContractProvider(PlennyCoordinatorJSON, this.web3.currentProvider),
+            this._setContractProvider(PlennyDappFactoryJSON, this.web3.currentProvider),
+            this._setContractProvider(PlennyOracleValidatorJSON, this.web3.currentProvider),
+            this._setContractProvider(PlennyValidatorElectionJSON, this.web3.currentProvider)
         ]);
+
+        // Websocket contract instances
         this.oceanWs = oceanWs;
         this.escrowWs = escrowWs;
-        this.dappFactoryWs = dappFactoryWs;
         this.oracleValidatorWs = oracleValidatorWs;
         this.validatorElectionWS = validatorElectionWS;
 
-        // Get contract instances
-        const [ocean, coordinator, dappFactory, oracleValidator, validatorElection] = await Promise.all([
-            this._setContractProvider(PlennyOceanJSON, privateKeyProvider),
-            this._setContractProvider(PlennyCoordinatorJSON, privateKeyProvider),
-            this._setContractProvider(PlennyDappFactoryJSON, privateKeyProvider),
-            this._setContractProvider(PlennyOracleValidatorJSON, privateKeyProvider),
-            this._setContractProvider(PlennyValidatorElectionJSON, privateKeyProvider)
-        ]);
+        // HTTP contract instances
         this.ocean = ocean;
         this.coordinator = coordinator;
         this.dappFactory = dappFactory;
         this.oracleValidator = oracleValidator;
         this.validatorElection = validatorElection;
 
-        // track timers
-        const cronTimers = '*/10 * * * *';
+        const cronPendingTimers = `*/10 * * * *`; // 10 minutes
+        const cronCapacityTimers = `*/10 * * * *`; // 10 minutes
+        const cronActiveTimers = `*/20 * * * *`; // 20 minutes
+        const cronClosingTimers = `*/60 * * * *`; // 60 minutes
 
-        this.taskLoopPendingChannels = cron.schedule(cronTimers, () => {
+        this.taskLoopPendingChannels = cron.schedule(cronPendingTimers, () => {
             this.loopPendingChannels();
-        });
+        }, {scheduled: true});
 
-        this.taskLoopActiveChannels = cron.schedule(cronTimers, () => {
-            this.loopActiveChannels();
-        });
-
-        this.taskLoopCapacityRequests = cron.schedule(cronTimers, () => {
+        this.taskLoopCapacityRequests = cron.schedule(cronCapacityTimers, () => {
             this.loopCapacityRequests();
-        });
+        }, {scheduled: true});
+
+        this.taskLoopActiveChannels = cron.schedule(cronActiveTimers, () => {
+            this.loopActiveChannels();
+        }, {scheduled: true});
+
+        this.taskLoopProfitlessChannels = cron.schedule(cronClosingTimers, () => {
+            this.closeActiveProfitlessChannels();
+        }, {scheduled: true});
 
         // Start the services
         await this.startTasks();
 
-        // Restart periodically
-        if (ALLOW_AUTO_RESTART === 'true') {
-            setInterval(() => {
-                this.restartTasks();
-            }, RESTART_INTERVAL_SECONDS * 1000);
-        }
-
         // Restart the service on new validator election cycle
         if (this.validatorElectionWS) {
             this.validatorElectionWS.NewValidators().on('data', event => {
-                if (event.returnValues.newValidators > 0) {
+                if (event.returnValues.newValidators.length > 0) {
                     this.restartTasks();
                 }
             });
@@ -117,203 +140,260 @@ class Dlsp {
                     this.restartTasks();
                 }
             });
+
+            this.oceanWs.MakerRemoved().on('data', event => {
+                if (event.returnValues.account === this.accounts[0]) {
+                    this.restartTasks();
+                }
+            });
         }
     }
 
+    async startTasks() {
+        const account = this.accounts[0];
+        const latestElectionBlock = await this.validatorElection.latestElectionBlock();
+        const [isOracleValidator, isElectedValidator, isMaker] = await Promise.all([
+            this.dappFactory.isOracleValidator(account, {from: account}),
+            this.validatorElection.validators(latestElectionBlock, account, {from: account}),
+            this.ocean.makerIndexPerAddress(account, {from: account})
+        ]);
+
+        if (isOracleValidator > 0 && isElectedValidator) {
+            logger.info('---- Running oracle service ----');
+            await this.subscribeActiveChannels();
+            await this.loopActiveChannels();
+            this.taskLoopActiveChannels.start();
+
+            await this.subscribePendingChannels();
+            await this.loopPendingChannels();
+            this.taskLoopPendingChannels.start();
+        } else {
+            logger.warn('Not an elected validator');
+            this.taskLoopActiveChannels.stop();
+            this.taskLoopPendingChannels.stop();
+        }
+
+        if (isMaker > 0) {
+            logger.info('---- Running maker service ----');
+            await this.subscribeCapacityRequests();
+            await this.loopCapacityRequests();
+            this.taskLoopCapacityRequests.start();
+
+            if (ALLOW_AUTO_CLOSING_CHANNELS) {
+                this.taskLoopProfitlessChannels.start();
+            }
+        } else {
+            logger.warn('Not a liquidity maker');
+            this.taskLoopCapacityRequests.stop();
+
+            if (ALLOW_AUTO_CLOSING_CHANNELS) {
+                this.taskLoopProfitlessChannels.stop();
+            }
+        }
+    }
+
+    stopTasks() {
+        this.taskLoopPendingChannels.stop();
+        this.taskLoopActiveChannels.stop();
+        this.taskLoopCapacityRequests.stop();
+        this.taskLoopProfitlessChannels.stop();
+    }
+
+    async restartTasks() {
+        logger.debug('---- Restarting DLSP ----');
+        this.stopTasks();
+        await this.startTasks();
+    }
 
     /* **************************************************************
      *                       PENDING CHANNELS                        *
      ************************************************************** */
-    async processPendingChannel(channelIndex) {
-        try {
-            const account = this.accounts[0];
-            const latestElectionBlock = await this.validatorElection.latestElectionBlock();
-
-            // if I am not an elected validator --> exit
-            const isElectedValidator = await this.validatorElection.validators(latestElectionBlock, account, {from: account});
-            if (!isElectedValidator) {
-                logger.info('Not an elected validator');
-                return true;
-            }
-
-            // if I have already answered --> exit
-            const answered = await this.oracleValidator.oracleOpenChannelAnswers(channelIndex, account, {from: account});
-            if (answered) {
-                logger.info('Already answered');
-                return true;
-            }
-
-            // if channel expired --> exit
-            const [channel, currentBlock] = await Promise.all([
-                this.coordinator.channels(channelIndex),
-                this.web3.eth.getBlockNumber()
-            ]);
-
-            if ((currentBlock - channel.creationDate) > AVERAGE_DAILY_BLOCK_COUNT) {
-                logger.info('Channel expired: ' + channel);
-                return true;
-            }
-
-            // we passed all checks proceed with channel processing
-            const channelPoint = channel.channelPoint.toString();
-            const channelId = await this.getChannelId(channelPoint);
-            if (channelId) {
-                const channelInfo = await lnd.getChannelInfo(channelId);
-
-                if (channelInfo && channelInfo.channel_id) {
-                    const channelCapacity = channelInfo.capacity;
-                    const node1PubKey = channelInfo.node1_pub;
-                    const node2Pubkey = channelInfo.node2_pub;
-
-                    const signatures = [];
-                    const keyPrefix = `open_${channelId}`;
-
-                    // fetch channel opening signatures from db
-                    try {
-                        logger.info('Getting channel opening signatures from db');
-                        const fetchedData = JSON.parse(await db.get(keyPrefix))
-                        signatures.push(...fetchedData);
-                        logger.info('Got channel opening signatures from db');
-                    } catch (e) {
-                        // ignore
-                        logger.info('Signatures not found in database');
-                    }
-
-                    // Check if we have reached the consensus, then open the channel.
-                    const consensusCount = signatures.length;
-                    const minQuorum = await this.oracleValidator.minQuorum({from: account});
-
-                    if (consensusCount >= minQuorum) {
-                        const signaturesOnly = this._extractSignaturesOnly(signatures);
-
-                        logger.info('confirmChannelOpening: ' + channelId + " " + channelIndex);
-                        const channelOpeningResult = await this.oracleValidator.execChannelOpening(
-                            channelIndex, channelCapacity, channelId, node1PubKey, node2Pubkey, signaturesOnly, {from: account});
-                        logger.info('Channel opening results: ' + 'channelId: ' + channelId + ' ' + JSON.stringify(channelOpeningResult));
-
-                        // Channel got opened --> exit
-                        return true;
-                    }
-
-                    // Consensus was not reached, request for more signatures.
-                    const validatorsList = await this._getElectedValidators();
-
-                    if (validatorsList.length > 0) {
-                        const reqData = {channelIndex: channelIndex, channelId: channelId}
-                        await this._processPendingSignatureRequests(validatorsList, signatures, keyPrefix, reqData, "/signChannelOpening");
-                    } else {
-                        logger.info('There are no active validators YET:');
-                    }
-                } else {
-                    logger.info('No such channel info found YET: ' + channelId);
-                }
-            } else {
-                logger.info('No such channel found YET: ' + channelPoint);
-            }
-        } catch (e) {
-            logger.error('Error:' + e.message);
-        }
-    }
-
-    async lightningChannelPending(channelIndex) {
-        // for every channelIndex, check if there is an existing timer; if not create one
-        let timer = this.pendingChannelTimers.get(channelIndex.toString());
-        if (!timer) {
-            timer = setTimeout(async function myTimer() {
-                this.processPendingChannel(channelIndex).then(function (result) {
-                    if (!result) {
-                        timer = setTimeout(myTimer.bind(this), 60000);
-                        this.pendingChannelTimers.set(channelIndex.toString(), timer);
-                    } else {
-                        clearTimeout(timer);
-                        this.pendingChannelTimers.delete(channelIndex.toString());
-                    }
-                }.bind(this)).catch((err) => {
-                    timer = setTimeout(myTimer.bind(this), 60000);
-                    this.pendingChannelTimers.set(channelIndex.toString(), timer);
-                });
-            }.bind(this), 5000);
-
-            this.pendingChannelTimers.set(channelIndex.toString(), timer);
-        }
-        return timer;
-    }
-
-    async getPendingChannels() {
-        logger.info('getPendingChannels');
-        try {
-            const account = this.accounts[0];
-            const pendingChannelsIndex = [];
-            const [channelCount, currentBlock] = await Promise.all([
-                this.coordinator.channelsCount({from: account}),
-                this.web3.eth.getBlockNumber()
-            ]);
-
-            for (let j = 1; j <= channelCount; j++) {
-                const req = await this.coordinator.channels(j, {from: account});
-
-                if (req.status == 0 && ((currentBlock - parseFloat(req.appliedDate.toString())) < AVERAGE_DAILY_BLOCK_COUNT)) {
-                    pendingChannelsIndex.push(j);
-                }
-            }
-
-            logger.info("Pending channel indexes: " + pendingChannelsIndex);
-            const promises = _.map(pendingChannelsIndex, async (channelIndex) => {
-
-                let timer = await this.lightningChannelPending(channelIndex);
-                return new Promise((res, rej) => {
-                    res(timer);
-                });
-            });
-
-            return await Promise.all(promises);
-        } catch (err) {
-            logger.error('getPendingChannels failed: ' + err);
-            return err;
-        }
-    }
-
     async subscribePendingChannels() {
         logger.info('subscribePendingChannels');
 
         if (this.escrowWs) {
             this.escrowWs.LightningChannelOpeningPending().on('data', event => {
                 const channelIndex = event.returnValues.channelIndex;
-                this.lightningChannelPending(channelIndex);
+                this._pushIfNotExists(this.pendingChannelIndexes, channelIndex.toString());
             });
         }
 
         if (this.oracleValidatorWs) {
             this.oracleValidatorWs.ChannelOpeningCommit().on('data', event => {
                 const channelIndex = event.returnValues.channelIndex;
-                logger.info('Channel commit event: ' + channelIndex);
-                this.lightningChannelPending(channelIndex);
+                logger.debug('Channel commit event: ' + channelIndex);
+                this._pushIfNotExists(this.pendingChannelIndexes, channelIndex.toString());
             });
             this.oracleValidatorWs.ChannelOpeningVerify().on('data', event => {
                 const channelIndex = event.returnValues.channelIndex;
-                logger.info('Channel verify event: ' + channelIndex);
-                this.lightningChannelPending(channelIndex);
+                logger.debug('Channel verify event: ' + channelIndex);
+                this._pushIfNotExists(this.pendingChannelIndexes, channelIndex.toString());
             });
             this.oracleValidatorWs.ChannelClosingCommit().on('data', event => {
                 const channelIndex = event.returnValues.channelIndex;
-                logger.info('Channel close commit event: ' + channelIndex);
-                this.lightningChannelActive(channelIndex);
+                logger.debug('Channel close commit event: ' + channelIndex);
+                this._pushIfNotExists(this.activeChannelIndexes, channelIndex.toString());
             });
             this.oracleValidatorWs.ChannelClosingVerify().on('data', event => {
                 const channelIndex = event.returnValues.channelIndex;
-                logger.info('Channel close verify event: ' + channelIndex);
-                this.lightningChannelActive(channelIndex);
+                logger.debug('Channel close verify event: ' + channelIndex);
+                this._pushIfNotExists(this.activeChannelIndexes, channelIndex.toString());
             });
+        }
+    }
+
+    async getPendingChannels() {
+        try {
+            const account = this.accounts[0];
+            const [channelCount, currentBlock, expirePeriod] = await Promise.all([
+                this.coordinator.channelsCount({from: account}),
+                this.web3L1.eth.getBlockNumber(),
+                this.ocean.cancelingRequestPeriod()
+            ]);
+
+            for (let j = 1; j <= channelCount; j++) {
+                const req = await this.coordinator.channels(j, {from: account});
+
+                // Tracking failed attempts to process channel per channelIndex.
+                let failedAttemptsCount = 0;
+                try {
+                    failedAttemptsCount = await db.get(`failedAttempt_${j}`);
+                } catch (e) {
+                    // swallow
+                }
+
+                if (failedAttemptsCount < CHANNEL_FAILED_ATTEMPTS_LIMIT
+                    && Number(req.status) === 0 && ((currentBlock - parseFloat(req.appliedDate.toString())) < expirePeriod)) {
+                    this._pushIfNotExists(this.pendingChannelIndexes, String(j));
+                } else {
+                    this.pendingChannelIndexes = this.pendingChannelIndexes.filter(item => item !== String(j));
+                }
+            }
+
+            logger.info("Pending channel indexes: " + this.pendingChannelIndexes);
+        } catch (err) {
+            logger.error('getPendingChannels failed: ' + err);
+        }
+    }
+
+    async processPendingChannel(channelIndex) {
+        try {
+            const account = this.accounts[0];
+
+            // if I have already answered --> exit
+            const answered = await this.oracleValidator.oracleOpenChannelAnswers(channelIndex, account, {from: account});
+            if (answered) {
+                logger.error('Already answered');
+                this.pendingChannelIndexes = this.pendingChannelIndexes.filter(item => item !== channelIndex.toString());
+            }
+
+            const [channel, currentBlock, expirePeriod] = await Promise.all([
+                this.coordinator.channels(channelIndex),
+                this.web3L1.eth.getBlockNumber(),
+                this.ocean.cancelingRequestPeriod()
+            ]);
+
+            // if channel is already opened --> exit
+            if (Number(channel.status) === 1) {
+                logger.error('Channel already opened');
+                this.pendingChannelIndexes = this.pendingChannelIndexes.filter(item => item !== channelIndex.toString());
+            }
+
+            // if channel expired --> exit
+            if ((currentBlock - channel.creationDate) > expirePeriod) {
+                logger.error('Channel expired: ' + channel);
+                this.pendingChannelIndexes = this.pendingChannelIndexes.filter(item => item !== channelIndex.toString());
+            }
+
+            // Tracking failed attempts to process channel per channelIndex.
+            let failedAttemptsCount = 0;
+            try {
+                failedAttemptsCount = await db.get(`failedAttempt_${channelIndex}`);
+            } catch (e) {
+                // ignore
+            }
+
+            if (failedAttemptsCount < CHANNEL_FAILED_ATTEMPTS_LIMIT) {
+                // we passed all checks proceed with channel processing
+                const channelPoint = channel.channelPoint.toString();
+                const channelId = await this.getChannelId(channelPoint);
+
+                if (channelId) {
+                    const channelInfo = await lnd.getChannelInfo(channelId);
+
+                    if (channelInfo && channelInfo.channel_id) {
+                        const channelCapacity = channelInfo.capacity;
+                        const node1PubKey = channelInfo.node1_pub;
+                        const node2Pubkey = channelInfo.node2_pub;
+
+                        const signatures = [];
+                        const keyPrefix = `open_${channelId}`;
+
+                        // fetch channel opening signatures from db
+                        try {
+                            logger.debug('Getting channel opening signatures from db');
+                            const fetchedData = JSON.parse(await db.get(keyPrefix));
+                            signatures.push(...fetchedData);
+                            logger.debug('Got channel opening signatures from db');
+                        } catch (e) {
+                            // ignore
+                            logger.debug('Signatures not found in database');
+                        }
+
+                        // Check if we have reached the consensus, then open the channel.
+                        const consensusCount = signatures.length;
+                        const minQuorum = await this.oracleValidator.minQuorum({from: account});
+
+                        if (consensusCount >= minQuorum) {
+                            const signaturesOnly = this._extractSignaturesOnly(signatures);
+
+                            const txCount = await this.web3.eth.getTransactionCount(account);
+                            logger.debug('processPendingChannel nonce: ' + txCount);
+                            logger.info('Confirm channel opening: ' + channelId + " " + channelIndex);
+                            const channelOpeningResult = await this.oracleValidator.execChannelOpening(
+                                channelIndex, channelCapacity, channelId, node1PubKey, node2Pubkey, signaturesOnly, {
+                                    from: account,
+                                    nonce: this.web3.utils.toHex(txCount)
+                                });
+                            logger.info('Channel opening results: ' + 'channelId: ' + channelId + ' ' + JSON.stringify(channelOpeningResult));
+
+                            // Channel got opened --> exit
+                            this.pendingChannelIndexes = this.pendingChannelIndexes.filter(item => item !== channelIndex.toString());
+                        }
+
+                        // Consensus was not reached, request for more signatures.
+                        const validatorsList = await this._getElectedValidators();
+
+                        if (validatorsList.length > 0) {
+                            const reqData = {channelIndex: channelIndex, channelId: channelId}
+                            await this._processPendingSignatureRequests(validatorsList, signatures, keyPrefix, reqData, "/signChannelOpening");
+                        } else {
+                            logger.warn('There are no active validators YET:');
+                        }
+                    } else {
+                        logger.warn('No such channel info found YET: ' + channelId);
+                    }
+                }
+            }
+        } catch (e) {
+            await this._handleFailedChannelAttempts(channelIndex);
+            if (e.message.includes('edge not found') || e.message.includes('zombie')) {
+                logger.debug('ChannelInfoFailed: ' + e.message);
+            } else {
+                logger.error('Error: ' + e.message);
+            }
         }
     }
 
     async openChannelRequested(capacityRequestIndex, channelPoint) {
         try {
             const account = this.accounts[0];
-            const txCount = await this.web3.eth.getTransactionCount(account, 'pending');
-            logger.info('openChannelRequested nonce: ' + txCount);
-            const options = {from: account, nonce: this.web3.utils.toHex(txCount)};
-            await this.ocean.openChannelRequested(channelPoint.toString(), capacityRequestIndex, options);
+            const txCount = await this.web3.eth.getTransactionCount(account);
+            logger.debug('openChannelRequested nonce: ' + txCount);
+            await this.ocean.openChannelRequested(channelPoint.toString(), capacityRequestIndex, {
+                from: account,
+                nonce: this.web3.utils.toHex(txCount)
+            });
         } catch (e) {
             logger.error('openChannelRequested failed: ' + e)
             throw e;
@@ -324,33 +404,59 @@ class Dlsp {
     /* **************************************************************
      *                       ACTIVE CHANNELS                        *
      ************************************************************** */
+    async subscribeActiveChannels() {
+        logger.info('subscribeActiveChannels');
+
+        if (this.escrowWs) {
+            this.escrowWs.LightningChannelOpeningConfirmed().on('data', event => {
+                const channelIndex = event.returnValues.channelIndex;
+                this._pushIfNotExists(this.activeChannelIndexes, channelIndex.toString());
+            });
+        }
+    }
+
+    async getActiveChannels() {
+        try {
+            const account = this.accounts[0];
+            const channelCount = await this.coordinator.channelsCount({from: account});
+
+            for (let j = 1; j <= channelCount; j++) {
+                const req = await this.coordinator.channels(j, {from: account});
+                if (req.status == 1) {
+                    this._pushIfNotExists(this.activeChannelIndexes, String(j));
+                }
+            }
+
+            logger.info("Active channel indexes: " + this.activeChannelIndexes);
+        } catch (err) {
+            logger.error("getActiveChannels failed: " + err);
+            return (err);
+        }
+    }
+
     async processActiveChannel(channelIndex) {
         try {
             const account = this.accounts[0];
-
-            // if I am not an elected validator --> exit
-            const latestElectionBlock = await this.validatorElection.latestElectionBlock();
-            const isElectedValidator = await this.validatorElection.validators(latestElectionBlock, account, {from: account});
-            if (!isElectedValidator) {
-                logger.error('Not an elected validator');
-                return true;
-            }
 
             // if I have already answered --> exit
             const answered = await this.oracleValidator.oracleCloseChannelAnswers(channelIndex, account, {from: account});
             if (answered) {
                 logger.error('Already answered');
-                return true;
+                this.activeChannelIndexes = this.activeChannelIndexes.filter(item => item !== channelIndex.toString());
             }
 
+            // if channel is already closed --> exit
             const channel = await this.coordinator.channels(channelIndex);
-            const channelPoint = channel.channelPoint;
+            if (Number(channel.status) === 2) {
+                logger.error('Channel already closed');
+                this.activeChannelIndexes = this.activeChannelIndexes.filter(item => item !== channelIndex.toString());
+            }
+
             // parse the channel point
+            const channelPoint = channel.channelPoint;
             const channelPointArray = _.split(channelPoint, ':', 2);
 
             if (channelPointArray.length === 2) {
-                logger.info("Channel point: " + channelPointArray);
-
                 // check if the txn really exists
                 const txId = channelPointArray[0];
                 const txIndex = parseInt(channelPointArray[1]);
@@ -360,80 +466,55 @@ class Dlsp {
                     const fundingOutput = await btc.getUnspentTransactionOut(txId, txIndex);
                     // no unspent transaction output
                     if (!fundingOutput) {
-                        return await this.channelClosed(channelIndex, txId);
+                        await this.channelClosed(channelIndex, txId);
                     }
                 }
             }
         } catch (err) {
-            logger.error(err);
+            if (err.message.includes('edge not found') || err.message.includes('zombie')) {
+                logger.debug('ChannelInfoFailed: ' + err.message);
+            } else {
+                logger.error('Error:' + err.message);
+            }
         }
     }
 
-    async lightningChannelActive(channelIndex) {
-        // for every channelIndex, check if there is an existing timer; if not create one
-        let timer = this.activeChannelTimers.get(channelIndex.toString());
-        if (!timer) {
-            timer = setTimeout(async function myTimer() {
-                this.processActiveChannel(channelIndex).then(function (result) {
-                    if (!result) {
-                        timer = setTimeout(myTimer.bind(this), 60000);
-                        this.activeChannelTimers.set(channelIndex.toString(), timer);
-                    } else {
-                        clearTimeout(timer);
-                        this.activeChannelTimers.delete(channelIndex.toString());
-                    }
-                }.bind(this)).catch((err) => {
-                    timer = setTimeout(myTimer.bind(this), 60000);
-                    this.activeChannelTimers.set(channelIndex.toString(), timer);
-                });
-            }.bind(this), 5000);
-
-            this.activeChannelTimers.set(channelIndex.toString(), timer);
-        }
-        return timer;
-    }
-
-    async getActiveChannels() {
-        logger.info('getActiveChannels');
+    async closeActiveProfitlessChannels() {
+        logger.info('Attempt to close profitless channels');
 
         try {
             const account = this.accounts[0];
-            const activeChannelsIndex = [];
+
+            const capacityRequests = [];
+            const capacityRequestsCount = await this.ocean.capacityRequestsCount();
+
+            for (let i = 1; i <= capacityRequestsCount; i++) {
+                const capacityRequest = await this.ocean.capacityRequests(i);
+                capacityRequests.push(capacityRequest);
+            }
+
+            const channels = [];
             const channelCount = await this.coordinator.channelsCount({from: account});
 
             for (let j = 1; j <= channelCount; j++) {
-                const req = await this.coordinator.channels(j, {from: account});
-                if (req.status == 1) {
-                    activeChannelsIndex.push(j);
-                }
+                const channel = await this.coordinator.channels(j, {from: account});
+                channels.push(channel);
             }
 
-            logger.info("Active channel indexes: " + activeChannelsIndex);
+            channels.forEach(channel => {
+                const matchingCapacityRequest = capacityRequests.find(capReq => (capReq.channelPoint === channel.channelPoint));
+                const channelReward = this.web3.utils.fromWei(channel.rewardAmount);
+                const capacityReward = matchingCapacityRequest ? this.web3.utils.fromWei(matchingCapacityRequest.plennyReward) : 0;
+                const remainingRewards = Number.parseFloat(channelReward) + Number.parseFloat(capacityReward);
 
-            // check if some of the channels have been closed
-            const promises = _.map(activeChannelsIndex, async (channelIndex) => {
-                let timer = await this.lightningChannelActive(channelIndex);
-                return new Promise((res, rej) => {
-                    res(timer)
-                })
+                if (matchingCapacityRequest && account === matchingCapacityRequest.makerAddress && channel.status.toString() === '1' && remainingRewards === 0) {
+                    const [channelPoint, outputIndex] = channel.channelPoint.split(':');
+                    lnd.closeChannel(channelPoint, outputIndex);
+                    logger.info("Attempted channel closing: " + channelPoint + ' ' + outputIndex);
+                }
             });
-
-            return await Promise.all(promises);
-        } catch (err) {
-            logger.error("getActiveChannels failed: " + err);
-            return (err);
-        }
-    }
-
-    async subscribeActiveChannels() {
-        logger.info('subscribeActiveChannels');
-
-        if (this.escrowWs) {
-            this.escrowWs.LightningChannelOpeningConfirmed().on('data', event => {
-                const channelIndex = event.returnValues.channelIndex;
-                logger.info('ON CHANNEL OPENING EVENT: ' + channelIndex)
-                this.lightningChannelActive(channelIndex);
-            });
+        } catch (e) {
+            logger.error('Channel closing attempt failed: ' + e);
         }
     }
 
@@ -445,13 +526,13 @@ class Dlsp {
 
             // fetch channel closing signatures from db
             try {
-                logger.info('Getting channel closing signatures from db');
+                logger.debug('Getting channel closing signatures from db');
                 const fetchedData = JSON.parse(await db.get(keyPrefix))
                 signatures.push(...fetchedData);
-                logger.info('Got channel closing signatures from db');
+                logger.debug('Got channel closing signatures from db');
             } catch (e) {
                 // ignore
-                logger.info('Signatures not found in database');
+                logger.debug('Signatures not found in database');
             }
 
             const consensusCount = signatures.length;
@@ -461,16 +542,18 @@ class Dlsp {
             if (consensusCount >= minQuorum) {
                 const signaturesOnly = this._extractSignaturesOnly(signatures);
 
-                logger.info('Closing channel...');
-                const txCount = await this.web3.eth.getTransactionCount(account, 'pending');
-                logger.info('nonce: ' + txCount);
+                const txCount = await this.web3.eth.getTransactionCount(account);
+                logger.debug('Closing channel... tx nonce: ' + txCount);
 
                 const channelClosingResult = await this.oracleValidator.execCloseChannel(
-                    channelIndex, closingTransactionId, signaturesOnly, {from: account});
+                    channelIndex, closingTransactionId, signaturesOnly, {
+                        from: account,
+                        nonce: this.web3.utils.toHex(txCount)
+                    });
                 logger.info('Channel closing result:' + 'channelIndex: ' + channelIndex + ' ' + JSON.stringify(channelClosingResult));
 
                 // Channel got closed --> exit
-                return true;
+                this.activeChannelIndexes = this.activeChannelIndexes.filter(item => item !== channelIndex.toString());
             }
 
             // Consensus was not reached, request for more signatures.
@@ -480,7 +563,7 @@ class Dlsp {
                 const reqData = {channelIndex: channelIndex}
                 await this._processPendingSignatureRequests(validatorsList, signatures, keyPrefix, reqData, "/signChannelClosing");
             } else {
-                logger.info('There are no active validators YET:');
+                logger.warn('There are no active validators YET:');
             }
 
         } catch (e) {
@@ -515,8 +598,8 @@ class Dlsp {
                 return new BadRequest('Lightning public keys not matching.');
             }
 
-            const txCount = await this.web3.eth.getTransactionCount(account, 'pending');
-            logger.info('nonce: ' + txCount);
+            const txCount = await this.web3.eth.getTransactionCount(account);
+            logger.debug('nonce: ' + txCount);
 
             return await this.ocean.requestLightningCapacity(nodeUrl, capacity, makerAddress, owner, nonce, signature, {
                 from: account,
@@ -525,6 +608,43 @@ class Dlsp {
         } catch (e) {
             logger.error('relayChannelOpening failed: ' + e);
             throw e;
+        }
+    }
+
+    async subscribeCapacityRequests() {
+        logger.info('subscribeCapacityRequests');
+
+        if (this.oceanWs) {
+            this.oceanWs.CapacityRequestPending().on('data', event => {
+                const capacityRequestIndex = event.returnValues.capacityRequestIndex;
+                const makerAddress = event.returnValues.makerAddress;
+
+                // check if makerAddress == dapp adddress
+                if (this.web3.utils.toChecksumAddress(this.accounts[0]) == makerAddress) {
+                    logger.info('New Capacity Request Received');
+                    this._pushIfNotExists(this.pendingCapacityIndexes, capacityRequestIndex.toString());
+                }
+            });
+        }
+    }
+
+    async getPendingCapacityRequests() {
+        logger.info('getPendingCapacityRequests');
+
+        try {
+            const account = this.accounts[0];
+            const capacityRequestCounts = await this.ocean.capacityRequestsCount({from: account});
+
+            for (let j = 1; j <= capacityRequestCounts; j++) {
+                const req = await this.ocean.capacityRequests(j, {from: account});
+                if (req.makerAddress == this.web3.utils.toChecksumAddress(account) && req.status == 0) {
+                    this._pushIfNotExists(this.pendingCapacityIndexes, String(j));
+                }
+            }
+
+            logger.info("Pending capacity indexes: " + this.pendingCapacityIndexes);
+        } catch (err) {
+            logger.error('getPendingCapacityRequests failed: ' + err);
         }
     }
 
@@ -537,14 +657,14 @@ class Dlsp {
         // check status
         const status = capacityRequest.status;
         if (status > 0) {
-            logger.info('Invalid capacity request: ' + capacityRequest);
-            return true;
+            logger.error('Invalid capacity request: ' + capacityRequest);
+            this.pendingCapacityIndexes = this.pendingCapacityIndexes.filter(item => item !== capacityRequestIndex.toString());
         }
 
         let savedChannelPoint;
         // check if the channel point was already saved
         try {
-            logger.info('Getting from DB');
+            logger.debug('Getting pending capacity requests from DB');
             savedChannelPoint = await db.get(capacityRequestIndex);
         } catch (e) {
             // ignore
@@ -553,7 +673,7 @@ class Dlsp {
         if (savedChannelPoint) {
             try {
                 await this.openChannelRequested(capacityRequestIndex, savedChannelPoint);
-                return true;
+                this.pendingCapacityIndexes = this.pendingCapacityIndexes.filter(item => item !== capacityRequestIndex.toString());
             } catch (e) {
                 logger.error(e);
                 throw e;
@@ -599,79 +719,7 @@ class Dlsp {
                 // The server has closed the stream.
             });
         });
-        return true;
-    }
-
-    async capacityRequestPending(capacityRequestIndex) {
-        // for every capacityRequestIndex, check if there is an existing timer; if not create one
-        let timer = this.pendingCapacityTimers.get(capacityRequestIndex.toString());
-        if (!timer) {
-            timer = setTimeout(async function myTimer() {
-                this.processPendingCapacityRequest(capacityRequestIndex).then(function (result) {
-                    if (!result) {
-                        timer = setTimeout(myTimer.bind(this), 60000);
-                        this.pendingCapacityTimers.set(capacityRequestIndex.toString(), timer);
-                    } else {
-                        clearTimeout(timer);
-                        this.pendingCapacityTimers.delete(capacityRequestIndex.toString());
-                    }
-                }.bind(this)).catch((err) => {
-                    timer = setTimeout(myTimer.bind(this), 60000);
-                    this.pendingCapacityTimers.set(capacityRequestIndex.toString(), timer);
-                });
-            }.bind(this), 5000);
-
-            this.pendingCapacityTimers.set(capacityRequestIndex.toString(), timer);
-        }
-        return timer;
-    }
-
-    async getPendingCapacityRequests() {
-        logger.info('getPendingCapacityRequests');
-
-        try {
-            const account = this.accounts[0];
-            const pendingCapacityIndexes = [];
-            const capacityRequestCounts = await this.ocean.capacityRequestsCount({from: account});
-
-            for (let j = 1; j <= capacityRequestCounts; j++) {
-                const req = await this.ocean.capacityRequests(j, {from: account});
-                if (req.makerAddress == this.web3.utils.toChecksumAddress(account) && req.status == 0) {
-                    pendingCapacityIndexes.push(j);
-                }
-            }
-
-            logger.info("Pending capacity indexes: " + pendingCapacityIndexes);
-            const promises = _.map(pendingCapacityIndexes, async (capacityRequestIndex) => {
-
-                let timer = await this.capacityRequestPending(capacityRequestIndex);
-                return new Promise((res, rej) => {
-                    res(timer)
-                })
-            });
-
-            return await Promise.all(promises);
-        } catch (err) {
-            logger.error('getPendingCapacityRequests failed: ' + err);
-            return err;
-        }
-    }
-
-    async subscribeCapacityRequests() {
-        logger.info('subscribeCapacityRequests');
-
-        if (this.oceanWs) {
-            this.oceanWs.CapacityRequestPending().on('data', event => {
-                const capacityRequestIndex = event.returnValues.capacityRequestIndex;
-                const makerAddress = event.returnValues.makerAddress;
-
-                // check if makerAddress == dapp adddress
-                if (this.web3.utils.toChecksumAddress(this.accounts[0]) == makerAddress) {
-                    logger.info('New Capacity Request Received');
-                    this.capacityRequestPending(capacityRequestIndex);
-                }
-            });
-        }
+        this.pendingCapacityIndexes = this.pendingCapacityIndexes.filter(item => item !== capacityRequestIndex.toString());
     }
 
 
@@ -680,18 +728,30 @@ class Dlsp {
      *                       LOOP NODES & CHANNELS                  *
      ************************************************************** */
 
+    processChannels(channels, executor, delay) {
+        for (let i = 0; i < channels.length; i++) {
+            (function (ind) {
+                setTimeout(async function () {
+                    await executor(channels[i]);
+                }, 1000 + (delay * ind));
+            })(i);
+        }
+    }
+
     async loopPendingChannels() {
         try {
             await this.getPendingChannels();
+            this.processChannels(this.pendingChannelIndexes, this.processPendingChannel.bind(this), DELAY_CHANNEL_PROCESSING);
             logger.info('DONE loopPendingChannels');
         } catch (err) {
-            logger.error("pending channel error", err);
+            logger.error("Pending channel error", err);
         }
     }
 
     async loopActiveChannels() {
         try {
             await this.getActiveChannels();
+            this.processChannels(this.activeChannelIndexes, this.processActiveChannel.bind(this), DELAY_CHANNEL_PROCESSING);
             logger.info('DONE loopActiveChannels');
         } catch (err) {
             logger.error("Active channel error", err);
@@ -701,49 +761,11 @@ class Dlsp {
     async loopCapacityRequests() {
         try {
             await this.getPendingCapacityRequests();
+            this.processChannels(this.pendingCapacityIndexes, this.processPendingCapacityRequest.bind(this), DELAY_CHANNEL_PROCESSING);
             logger.info('DONE loopPendingCapacityRequests');
         } catch (err) {
             logger.error("Pending capacity error", err);
         }
-    }
-
-    async startTasks() {
-        const account = this.accounts[0];
-        const [isOracleValidator, isMaker] = await Promise.all([
-            this.dappFactory.isOracleValidator(account, {from: account}),
-            this.ocean.makerIndexPerAddress(account, {from: account})
-        ]);
-
-        if (isOracleValidator > 0) {
-            logger.info('----Running oracle service----');
-            await this.subscribePendingChannels();
-            await this.subscribeActiveChannels();
-
-            await this.loopActiveChannels();
-            this.taskLoopActiveChannels.start();
-
-            await this.loopPendingChannels();
-            this.taskLoopPendingChannels.start();
-        }
-
-        if (isMaker > 0) {
-            logger.info('----Running maker scheduler----');
-            await this.subscribeCapacityRequests();
-            await this.loopCapacityRequests();
-            this.taskLoopCapacityRequests.start();
-        }
-    }
-
-    stopTasks() {
-        this.taskLoopPendingChannels.stop();
-        this.taskLoopActiveChannels.stop();
-        this.taskLoopCapacityRequests.stop();
-    }
-
-    async restartTasks() {
-        logger.info('---Restarting scheduler----');
-        this.stopTasks();
-        await this.startTasks();
     }
 
     /* **************************************************************
@@ -751,7 +773,7 @@ class Dlsp {
      ************************************************************** */
     async getChannelId(channelPoint) {
         const channelPointArray = _.split(channelPoint, ':', 2);
-        if (channelPointArray.length == 2) {
+        if (channelPointArray.length === 2) {
             const txId = channelPointArray[0];
             const txIndex = parseInt(channelPointArray[1]);
             const txInfo = await btc.getTransactionInfo(txId);
@@ -767,7 +789,7 @@ class Dlsp {
                     const blockIndex = blockInfo.height;
                     const blockTxns = blockInfo.tx;
                     for (let k = 0; k < blockTxns.length; k++) {
-                        if (blockTxns[k] == txId) {
+                        if (blockTxns[k] === txId) {
                             txBlockIndex = k;
                         }
                     }
@@ -791,7 +813,7 @@ class Dlsp {
         for (const contract of contracts) {
             try {
                 latest = await contract.deployed();
-            } catch(e) {
+            } catch (e) {
                 logger.error('Failed to retrieve contract.', e);
             }
         }
@@ -870,21 +892,24 @@ class Dlsp {
                                 });
 
                             const signature = response.data.signature;
-                            logger.info('Got signature from: ' + validatorInfo.validatorServiceUrl + endpoint, 'SIGNATURE', signature);
 
-                            _signatures.push({address: validator, signature: signature});
+                            if (signature) {
+                                logger.info('Got signature from: ' + validatorInfo.validatorServiceUrl + endpoint);
+                                logger.info('Signature: ' + signature);
+
+                                // Store the results array in database
+                                _signatures.push({address: validator, signature: signature});
+                                db.put(dbKeyPrefix, JSON.stringify(_signatures));
+                                logger.info('Signatures stored');
+                            }
                         } catch (e) {
                             // swallow exception
-                            logger.error('Failed to request signature from validator with address: ' + validator, e.message);
+                            logger.error(`Failed to request signature from validator with address: ${validator} - ${e.message}`);
                         }
                     }
                 }
             }
         }
-
-        // Store the results array in database
-        db.put(dbKeyPrefix, JSON.stringify(_signatures));
-        logger.info('Signatures stored');
     }
 
     // Election
@@ -910,6 +935,25 @@ class Dlsp {
         }
         return prefix;
     };
+
+    async _handleFailedChannelAttempts(channelIndex) {
+        let failedChannelAttempts = 0;
+
+        try {
+            failedChannelAttempts = await db.get(`failedAttempt_${channelIndex}`);
+        } catch (e) {
+            // ignore
+        }
+
+        logger.debug('Failed attempt count: ' + failedChannelAttempts);
+        db.put(`failedAttempt_${channelIndex}`, ++failedChannelAttempts);
+    }
+
+    _pushIfNotExists(arr, value) {
+        if (!arr.includes(value)) {
+            arr.push(value);
+        }
+    }
 }
 
 module.exports = new Dlsp();

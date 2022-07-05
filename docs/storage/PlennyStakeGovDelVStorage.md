@@ -1,11 +1,11 @@
 ---
-title: PlennyLockingStorage.sol Spec
-id: PlennyLockingStorage
+title: PlennyStakeGovDelVStorage.sol Spec
+id: PlennyStakeGovDelVStorage
 ---
 
- PlennyLockingStorage
+ PlennyStakeGovDelVStorage
 
-Storage contract for PlennyLocking
+Storage contract for PlennyStakeGovDelV
 
 
 
@@ -14,8 +14,8 @@ Storage contract for PlennyLocking
 ### `totalVotesLocked()`
 ### `totalVotesCollected()`
 ### `govLockReward()`
-### `nextDistributionSeconds()`
-### `averageBlockCountPerWeek()`
+### `nextDistributionBlocks()`
+### `averageBlocksPerWeek()`
 ### `exitFee()`
 ### `lockingFee()`
 ### `totalVoteNumCheckpoints()`

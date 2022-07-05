@@ -5,13 +5,15 @@ pragma solidity >=0.6.0 <0.8.0;
 import "@openzeppelin/contracts-upgradeable/token/ERC20/SafeERC20Upgradeable.sol";
 import "./interfaces/IPlennyERC20.sol";
 import "./PlennyBasePausableV2.sol";
-import "./storage/PlennyLockingStorage.sol";
+import "./storage/PlennyStakeGovDelVStorage.sol";
 import "./interfaces/IPlennyLocking.sol";
 import "./libraries/ExtendedMathLib.sol";
 
-/// @title  PlennyLocking
-/// @notice Manages the locked balances in Plenny for DAO governance.
-contract PlennyLocking is PlennyBasePausableV2, PlennyLockingStorage {
+/// @title PlennyStakeGovDelV
+/// (PlennyLocking in BETA release.)
+/// @notice Manages staking for governance and the delegation of voting rights.
+///         Attn: The storage contract refers to governance staking (not locking).
+contract PlennyStakeGovDelV is PlennyBasePausableV2, PlennyStakeGovDelVStorage {
 
     using SafeMathUpgradeable for uint256;
     using SafeERC20Upgradeable for IPlennyERC20;
@@ -33,13 +35,13 @@ contract PlennyLocking is PlennyBasePausableV2, PlennyLockingStorage {
         lockingFee = 500;
 
         // 0.5%
-        withdrawFee = 50;
+        exitFee = 50;
 
         // 1 day = 6500 blocks
-        nextDistributionSeconds = 6500;
+        nextDistributionBlocks = 6500;
 
         // 1 week in blocks
-        averageBlockCountPerWeek = 45500;
+        averageBlocksPerWeek = 45500;
 
         // 0.01%
         govLockReward = 1;
@@ -71,7 +73,7 @@ contract PlennyLocking is PlennyBasePausableV2, PlennyLockingStorage {
         totalVotesLocked = totalVotesLocked.sub(oldVote);
 
         uint256 multiplier = calculateMultiplier(period);
-        record.endDate = _blockNumber().add(averageBlockCountPerWeek.mul(period));
+        record.endDate = _blockNumber().add(averageBlocksPerWeek.mul(period));
         record.multiplier = multiplier;
 
         uint newVote = record.amount.mul(record.multiplier).div(WEIGHT_MULTIPLIER);
@@ -79,10 +81,19 @@ contract PlennyLocking is PlennyBasePausableV2, PlennyLockingStorage {
         userVoteCount[msg.sender] = userVoteCount[msg.sender].add(newVote);
         totalVotesLocked = totalVotesLocked.add(newVote);
 
+        if (hasDelegated[msg.sender]) {
+            uint256 addDelegatedVote = newVote > oldVote? newVote - oldVote : oldVote - newVote;
+            userDelegatedVotesCount[myDelegatedGovernor[msg.sender].governor] = 
+                userDelegatedVotesCount[myDelegatedGovernor[msg.sender].governor].add(addDelegatedVote);
+            bool newVsOld = newVote > oldVote? true : false;
+            _voteChanged(myDelegatedGovernor[msg.sender].governor, 0, addDelegatedVote, 
+                hasDelegated[myDelegatedGovernor[msg.sender].governor], newVsOld);
+        }
+
         if (newVote > oldVote) {
-            _voteChanged(msg.sender, newVote - oldVote, true);
+            _voteChanged(msg.sender, newVote - oldVote, 0, hasDelegated[msg.sender], true);
         } else {
-            _voteChanged(msg.sender, oldVote - newVote, false);
+            _voteChanged(msg.sender, oldVote - newVote, 0, hasDelegated[msg.sender], false);
         }
     }
 
@@ -100,12 +111,12 @@ contract PlennyLocking is PlennyBasePausableV2, PlennyLockingStorage {
             userLockedPeriod[msg.sender] = 0;
         }
 
-        uint256 fee = record.amount.mul(withdrawFee).div(100).div(100);
+        uint256 fee = record.amount.mul(exitFee).div(100).div(100);
         uint256 vote = record.amount.mul(record.multiplier).div(WEIGHT_MULTIPLIER);
 
-        if (_blockNumber() > userLastCollectedPeriod[msg.sender].add(nextDistributionSeconds)) {
+        if (_blockNumber() > userLastCollectedPeriod[msg.sender].add(nextDistributionBlocks)) {
             totalUserEarned[msg.sender] = totalUserEarned[msg.sender].add(
-                calculateReward(vote).mul(_blockNumber().sub(userLastCollectedPeriod[msg.sender])).div(nextDistributionSeconds));
+                calculateReward(vote).mul(_blockNumber().sub(userLastCollectedPeriod[msg.sender])).div(nextDistributionBlocks));
             totalVotesCollected = totalVotesCollected.add(vote);
             totalVotesLocked = totalVotesLocked.sub(vote);
         } else {
@@ -118,7 +129,14 @@ contract PlennyLocking is PlennyBasePausableV2, PlennyLockingStorage {
 
         record.deleted = true;
         removeElementFromArray(index, recordIndexesPerAddress[msg.sender]);
-        _voteChanged(msg.sender, vote, false);
+        _voteChanged(msg.sender, vote, 0, hasDelegated[msg.sender], false);
+
+        if (hasDelegated[msg.sender]) {
+            userDelegatedVotesCount[myDelegatedGovernor[msg.sender].governor] = 
+                userDelegatedVotesCount[myDelegatedGovernor[msg.sender].governor].sub(vote);
+            _voteChanged(myDelegatedGovernor[msg.sender].governor, 0, vote, 
+                hasDelegated[myDelegatedGovernor[msg.sender].governor], false);
+        }
 
         IPlennyERC20 token = contractRegistry.plennyTokenContract();
         token.safeTransfer(msg.sender, record.amount - fee);
@@ -131,7 +149,7 @@ contract PlennyLocking is PlennyBasePausableV2, PlennyLockingStorage {
             require(userLockedPeriod[msg.sender] < _blockNumber(), "ERR_LOCKED_PERIOD");
         }
 
-        uint256 multiplier = (_blockNumber().sub(userLastCollectedPeriod[msg.sender])).div(nextDistributionSeconds);
+        uint256 multiplier = (_blockNumber().sub(userLastCollectedPeriod[msg.sender])).div(nextDistributionBlocks);
         uint256 reward = calculateReward(userVoteCount[msg.sender]).mul(multiplier).add(totalUserEarned[msg.sender]);
         uint256 fee = reward.mul(lockingFee).div(10000);
 
@@ -151,7 +169,7 @@ contract PlennyLocking is PlennyBasePausableV2, PlennyLockingStorage {
         if (reset) {
             userLockedPeriod[msg.sender] = 0;
         } else {
-            userLockedPeriod[msg.sender] = _blockNumber().add(nextDistributionSeconds);
+            userLockedPeriod[msg.sender] = _blockNumber().add(nextDistributionBlocks);
         }
         userLastCollectedPeriod[msg.sender] = _blockNumber();
         totalUserEarned[msg.sender] = 0;
@@ -162,10 +180,40 @@ contract PlennyLocking is PlennyBasePausableV2, PlennyLockingStorage {
         require(plennyReward.transfer(contractRegistry.requireAndGetAddress("PlennyRePLENishment"), fee), "Failed");
     }
 
+    /// @notice Delegates Plenny to the given governor.
+    /// @param  newGovernor address of the governor to delegate to
+    function delegateTo(address payable newGovernor) external whenNotPaused _logs_ {
+        require(myDelegatedGovernor[msg.sender].governor != newGovernor, "ERR_ALREADY_DELEGATION");
+        require(msg.sender != newGovernor, "ERR_SELF_DELEGATION");
+        require(userVoteCount[newGovernor] > 0, "ERR_NOT_GOVERNOR");
+        myDelegatedGovernor[msg.sender].delegationIndex = myDelegatedGovernor[msg.sender].delegationIndex.add(1);
+        myDelegatedGovernor[msg.sender].governor = newGovernor;
+
+        userDelegatedVotesCount[newGovernor] = userDelegatedVotesCount[newGovernor].add(userVoteCount[msg.sender]);
+        hasDelegated[msg.sender] = true;
+        _voteChanged(msg.sender, 0, 0, hasDelegated[msg.sender], false);
+        _voteChanged(newGovernor, 0, userVoteCount[msg.sender], hasDelegated[newGovernor], true);
+    }
+
+    /// @notice Removes a delegation.
+    function undelegate() public whenNotPaused _logs_ {
+        require(myDelegatedGovernor[msg.sender].delegationIndex > 0, "ERR_NOT_DELEGATING");
+        userDelegatedVotesCount[myDelegatedGovernor[msg.sender].governor] = 
+            userDelegatedVotesCount[myDelegatedGovernor[msg.sender].governor].sub(userVoteCount[msg.sender]);
+
+        myDelegatedGovernor[msg.sender].delegationIndex = 0;
+        _voteChanged(msg.sender, 0, 0, false, true);
+        _voteChanged(myDelegatedGovernor[msg.sender].governor, 0, userVoteCount[msg.sender], 
+            hasDelegated[myDelegatedGovernor[msg.sender].governor], false);
+
+        delete myDelegatedGovernor[msg.sender];
+        hasDelegated[msg.sender] = false;
+    }
+
     /// @notice Changes the next distribution in seconds. Managed by the contract owner
     /// @param  amount number of blocks.
-    function setNextDistributionSeconds(uint256 amount) external onlyOwner {
-        nextDistributionSeconds = amount;
+    function setNextDistributionBlocks(uint256 amount) external onlyOwner {
+        nextDistributionBlocks = amount;
     }
 
     /// @notice Changes the governance lock reward multiplier. Managed by the contract owner.
@@ -174,10 +222,10 @@ contract PlennyLocking is PlennyBasePausableV2, PlennyLockingStorage {
         govLockReward = amount;
     }
 
-    /// @notice Changes the withdraw Fee. Managed by the contract owner.
+    /// @notice Changes the exit Fee. Managed by the contract owner.
     /// @param  amount multiplier of 100
-    function setWithdrawFee(uint256 amount) external onlyOwner {
-        withdrawFee = amount;
+    function setGovExitFee(uint256 amount) external onlyOwner {
+        exitFee = amount;
     }
 
     /// @notice Changes the locking Fee multiplier. Managed by the contract owner.
@@ -188,8 +236,8 @@ contract PlennyLocking is PlennyBasePausableV2, PlennyLockingStorage {
 
     /// @notice Changes average block counts per week. Managed by the contract owner.
     /// @param  count blocks per week
-    function setAverageBlockCountPerWeek(uint256 count) external onlyOwner {
-        averageBlockCountPerWeek = count;
+    function setAverageBlocksPerWeek(uint256 count) external onlyOwner {
+        averageBlocksPerWeek = count;
     }
 
     /// @notice Gets number of locked records per address.
@@ -222,7 +270,9 @@ contract PlennyLocking is PlennyBasePausableV2, PlennyLockingStorage {
     /// @param  blockNumber block number
     /// @return uint256 total votes
     function getTotalVoteCountAtBlock(uint blockNumber) external view override returns (uint256) {
-        return _iterateCheckpoints(blockNumber, totalVoteNumCheckpoints, totalVoteCount);
+        (uint256 voteCount, , ) = 
+            _iterateCheckpoints(blockNumber, totalVoteNumCheckpoints, totalVoteCount);
+        return voteCount;
     }
 
     /// @notice Gets the votes for the given user at the given block number.
@@ -230,7 +280,29 @@ contract PlennyLocking is PlennyBasePausableV2, PlennyLockingStorage {
     /// @param  blockNumber block number
     /// @return uint256 vote per user
     function getUserVoteCountAtBlock(address account, uint blockNumber) external view override returns (uint256) {
-        return _iterateCheckpoints(blockNumber, numCheckpoints[account], checkpoints[account]);
+        (uint256 voteCount, , ) = 
+            _iterateCheckpoints(blockNumber, numCheckpoints[account], checkpoints[account]);
+        return voteCount;
+    }
+
+    /// @notice Gets the delegated votes for the given user at the given block number.
+    /// @param  account user address
+    /// @param  blockNumber block number
+    /// @return uint256 delegated votes per user
+    function getUserDelegatedVoteCountAtBlock(address account, uint blockNumber) external view override returns (uint256) {
+        (, uint256 delegatedVotes, ) = 
+            _iterateCheckpoints(blockNumber, numCheckpoints[account], checkpoints[account]);
+        return delegatedVotes;
+    }
+
+    /// @notice Checks if a governor has delegated to other governor at the given block number.
+    /// @param  governor address to check
+    /// @param  blockNumber block number
+    /// @return bool true/false
+    function checkDelegationAtBlock(address governor, uint blockNumber) external view override returns (bool) {
+        (, , bool isDelegating ) = 
+            _iterateCheckpoints(blockNumber, numCheckpoints[governor], checkpoints[governor]);
+        return isDelegating;
     }
 
     /// @notice Calculates the reward of the user based on the user's participation (votes) in the the locking.
@@ -256,7 +328,7 @@ contract PlennyLocking is PlennyBasePausableV2, PlennyLockingStorage {
         require(msg.sender == beneficiary, "ERR_NOT_AUTH");
 
         uint256 multiplier = calculateMultiplier(period);
-        uint256 endDate = _blockNumber().add(averageBlockCountPerWeek.mul(period));
+        uint256 endDate = _blockNumber().add(averageBlocksPerWeek.mul(period));
         lockedRecords.push(LockedRecord(beneficiary, amount, _blockNumber(), endDate, multiplier, false));
         uint256 index = lockedRecords.length - 1;
         recordIndexesPerAddress[beneficiary].push(index);
@@ -268,11 +340,18 @@ contract PlennyLocking is PlennyBasePausableV2, PlennyLockingStorage {
         totalVotesLocked = totalVotesLocked.add(vote);
         totalValueLocked = totalValueLocked.add(amount);
         if (userLockedPeriod[beneficiary] == 0) {
-            userLockedPeriod[beneficiary] = _blockNumber().add(nextDistributionSeconds);
+            userLockedPeriod[beneficiary] = _blockNumber().add(nextDistributionBlocks);
             userLastCollectedPeriod[beneficiary] = _blockNumber();
         }
 
-        _voteChanged(beneficiary, vote, true);
+        userDelegatedVotesCount[myDelegatedGovernor[beneficiary].governor] = 
+            userDelegatedVotesCount[myDelegatedGovernor[beneficiary].governor].add(vote);
+
+        _voteChanged(beneficiary, vote, 0, hasDelegated[beneficiary], true);
+
+        if (hasDelegated[beneficiary]) {
+            _voteChanged(myDelegatedGovernor[beneficiary].governor, 0, vote, hasDelegated[myDelegatedGovernor[beneficiary].governor], true);
+        }
 
         contractRegistry.plennyTokenContract().safeTransferFrom(msg.sender, address(this), amount);
     }
@@ -281,32 +360,40 @@ contract PlennyLocking is PlennyBasePausableV2, PlennyLockingStorage {
     /// @param  user address
     /// @param  amount delta amount
     /// @param  increase true, if amount is increasing, false otherwise
-    function _voteChanged(address user, uint amount, bool increase) internal {
+    function _voteChanged(address user, uint amount, uint delegatedAmount, bool delegated, bool increase) internal {
         uint chkNum = numCheckpoints[user];
         uint oldVotes = chkNum > 0 ? checkpoints[user][chkNum - 1].voteCount : 0;
+        uint oldDelegatedVotes = chkNum > 0 ? checkpoints[user][chkNum - 1].delegatedVoteCount : 0;
         // get latest checkpoint votes
         uint newVotes = increase ? oldVotes.add(amount) : oldVotes.sub(amount);
+        uint newDelegatedVotes = increase ? oldDelegatedVotes.add(delegatedAmount) : oldDelegatedVotes.sub(delegatedAmount);
 
         // write checkpoint for totalVoteCount
         uint oldTotalVotes = totalVoteNumCheckpoints > 0 ? totalVoteCount[totalVoteNumCheckpoints - 1].voteCount : 0;
+        uint oldDelegatedTotalVotes = totalVoteNumCheckpoints > 0 ? 
+            totalVoteCount[totalVoteNumCheckpoints - 1].delegatedVoteCount : 0;
+
         // get latest checkpoint votes
         uint newTotalVotes = increase ? oldTotalVotes.add(amount) : oldTotalVotes.sub(amount);
+        uint newDelegatedTotalVotes = increase ? oldDelegatedTotalVotes.add(delegatedAmount) : oldDelegatedTotalVotes.sub(delegatedAmount);
 
-        _writeNewCheckpoint(user, chkNum, newVotes);
-        _writeNewTotalVoteCheckpoint(totalVoteNumCheckpoints, newTotalVotes);
+        _writeNewCheckpoint(user, chkNum, newVotes, newDelegatedVotes, delegated);
+        _writeNewTotalVoteCheckpoint(totalVoteNumCheckpoints, newTotalVotes, newDelegatedTotalVotes, delegated);
     }
 
     /// @notice Stores new checkpoint for the user.
     /// @param  user address
     /// @param  nCheckpoints number of checkpoints
     /// @param  newVotes new votes
-    function _writeNewCheckpoint(address user, uint nCheckpoints, uint newVotes) internal {
+    function _writeNewCheckpoint(address user, uint nCheckpoints, uint newVotes, uint newDelegatedVotes, bool delegated) internal {
         uint blockNumber = _blockNumber();
 
         if (nCheckpoints > 0 && checkpoints[user][nCheckpoints - 1].fromBlock == blockNumber) {
             checkpoints[user][nCheckpoints - 1].voteCount = newVotes;
+            checkpoints[user][nCheckpoints - 1].delegatedVoteCount = newDelegatedVotes;
+            checkpoints[user][nCheckpoints - 1].isDelegating = delegated;
         } else {
-            checkpoints[user][nCheckpoints] = Checkpoint(blockNumber, newVotes);
+            checkpoints[user][nCheckpoints] = Checkpoint(blockNumber, newVotes, newDelegatedVotes, delegated);
             numCheckpoints[user] = nCheckpoints + 1;
         }
     }
@@ -314,13 +401,16 @@ contract PlennyLocking is PlennyBasePausableV2, PlennyLockingStorage {
     /// @notice Store new total checkpoint for all users.
     /// @param  nTotalCheckpoints number of total checkpoints
     /// @param  newTotalVotes total votes
-    function _writeNewTotalVoteCheckpoint(uint nTotalCheckpoints, uint newTotalVotes) internal {
+    function _writeNewTotalVoteCheckpoint(uint nTotalCheckpoints, uint newTotalVotes, 
+        uint newTotalDelegatedVotes, bool delegated) internal {
         uint blockNumber = _blockNumber();
 
         if (nTotalCheckpoints > 0 && totalVoteCount[nTotalCheckpoints - 1].fromBlock == blockNumber) {
             totalVoteCount[nTotalCheckpoints - 1].voteCount = newTotalVotes;
+            totalVoteCount[nTotalCheckpoints - 1].delegatedVoteCount = newTotalDelegatedVotes;
+            totalVoteCount[nTotalCheckpoints - 1].isDelegating = delegated;
         } else {
-            totalVoteCount[nTotalCheckpoints] = Checkpoint(blockNumber, newTotalVotes);
+            totalVoteCount[nTotalCheckpoints] = Checkpoint(blockNumber, newTotalVotes, newTotalDelegatedVotes, delegated);
             totalVoteNumCheckpoints = nTotalCheckpoints + 1;
         }
     }
@@ -331,20 +421,21 @@ contract PlennyLocking is PlennyBasePausableV2, PlennyLockingStorage {
     /// @param  _checkpoints all checkpoints
     /// @return uint256 balance at the given block
     function _iterateCheckpoints(uint blockNumber, uint _nCheckpoints, mapping(uint => Checkpoint) storage _checkpoints)
-    internal view returns (uint256) {
+    internal view returns (uint256, uint256, bool) {
 
         if (_nCheckpoints == 0) {
-            return 0;
+            return (0, 0, false);
         }
 
         // First check most recent balance
         if (_checkpoints[_nCheckpoints - 1].fromBlock <= blockNumber) {
-            return _checkpoints[_nCheckpoints - 1].voteCount;
+            return (_checkpoints[_nCheckpoints - 1].voteCount, _checkpoints[_nCheckpoints - 1].delegatedVoteCount,
+                _checkpoints[_nCheckpoints - 1].isDelegating);
         }
 
         // Next check implicit zero balance
         if (_checkpoints[0].fromBlock > blockNumber) {
-            return 0;
+            return (0, 0, false);
         }
 
         uint lower = 0;
@@ -354,14 +445,14 @@ contract PlennyLocking is PlennyBasePausableV2, PlennyLockingStorage {
             // ceil, avoiding overflow
             Checkpoint memory cp = _checkpoints[center];
             if (cp.fromBlock == blockNumber) {
-                return cp.voteCount;
+                return (cp.voteCount, cp.delegatedVoteCount, cp.isDelegating);
             } else if (cp.fromBlock < blockNumber) {
                 lower = center;
             } else {
                 upper = center - 1;
             }
         }
-        return _checkpoints[lower].voteCount;
+        return (_checkpoints[lower].voteCount, _checkpoints[lower].delegatedVoteCount, _checkpoints[lower].isDelegating);
     }
 
     /// @notice Calculates the user's multiplier based on its locking period.
@@ -386,5 +477,26 @@ contract PlennyLocking is PlennyBasePausableV2, PlennyLockingStorage {
             array[index] = array[array.length - 1];
             array.pop();
         }
+    }
+
+    /// @notice Checks if a governor has delegated to other governor
+    /// @param  governor address to check
+    /// @return bool true/false
+    function checkDelegation(address governor) external view override returns (bool) {
+        return hasDelegated[governor];
+    }
+
+    /// @notice Gets the delegated votes per user
+    /// @param  delegator address to check
+    /// @return uint256 delegated votes
+    function delegatedVotesCount(address delegator) external view override returns (uint256) {
+        return userDelegatedVotesCount[delegator];
+    }
+
+    /// @notice Gets the plenny locked by user
+    /// @param  user address to check
+    /// @return uint256 locked plenny
+    function userPlennyLocked(address user) external view override returns (uint256) {
+        return userValueLocked[user];
     }
 }

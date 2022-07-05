@@ -45,19 +45,27 @@ contract PlennyDao is PlennyBasePausableV2, PlennyDaoStorage {
         _;
     }
 
+    /// @dev Checks if a staked balance of a user is above threshold
+    modifier onlyGovernanceStakers {
+        require(contractRegistry.lockingContract().userPlennyLocked(msg.sender) >= governorThreshold,
+            "Not enough staked tokens");
+        _;
+    }
+
     /// @notice Initializes the smart contract instead of a constructor.
     /// @dev    Can be called only once during deployment.
     /// @param  _registry PlennyContractRegistry
     function initialize(address _registry) external initializer {
-        // sets the minimal quorum to 50%
-        minQuorum = 5000;
+        // sets the minimal quorum to 33.87%
+        minQuorum = 3387;
         // set the proposal threshold to 1%
         proposalThreshold = 100;
-        //execution delay in blocks count with an average of 13s per block, 2 minutes approximately
-        delay = 10;
+        // execution delay in blocks count with an average of 13s per block, 2 minutes approximately
+        delay = 13000;
         // voting duration & delays in blocks
-        votingDuration = 20;
-        votingDelay = 1;
+        votingDuration = 19500;
+        votingDelay = 6500;
+        governorThreshold = uint256(20000).mul((10 ** uint256(18)));
 
         PlennyBasePausableV2.__plennyBasePausableInit(_registry);
 
@@ -74,10 +82,11 @@ contract PlennyDao is PlennyBasePausableV2, PlennyDaoStorage {
     /// @param  description the description of the proposal
     /// @return uint proposal id
     function propose(address[] memory targets, uint[] memory values, string[] memory signatures,
-        bytes[] memory calldatas, string memory description) external whenNotPaused _logs_ returns (uint) {
+        bytes[] memory calldatas, string memory description) external whenNotPaused onlyGovernanceStakers _logs_ returns (uint) {
 
-        require(contractRegistry.lockingContract().getUserVoteCountAtBlock(
-            msg.sender, _blockNumber().sub(1)) > minProposalVoteCount(_blockNumber().sub(1)), "ERR_BELOW_THREASHOLD");
+        uint votes = calculateAvailableVotes(msg.sender, _blockNumber().sub(1));
+
+        require(votes > minProposalVoteCount(_blockNumber().sub(1)), "ERR_BELOW_THRESHOLD");
         require(targets.length == values.length && targets.length == signatures.length
             && targets.length == calldatas.length, "ERR_LENGHT_MISMATCH");
         require(targets.length != 0, "ERR_NO_ACTION");
@@ -142,7 +151,7 @@ contract PlennyDao is PlennyBasePausableV2, PlennyDaoStorage {
 
     /// @notice Queues a proposal into the timelock for execution, if it has been voted successfully.
     /// @param  _proposalID proposal id
-    function queue(uint _proposalID) external whenNotPaused nonReentrant _logs_ {
+    function queue(uint _proposalID) external whenNotPaused nonReentrant onlyGovernanceStakers _logs_ {
         require(state(_proposalID) == ProposalState.Succeeded, "ERR_NOT_SUCCESS");
         Proposal storage proposal = proposals[_proposalID];
 
@@ -162,8 +171,10 @@ contract PlennyDao is PlennyBasePausableV2, PlennyDaoStorage {
         require(state != ProposalState.Executed, "ERR_ALREADY_EXEC");
 
         Proposal storage proposal = proposals[_proposalID];
-        require(msg.sender == guardian || contractRegistry.lockingContract().getUserVoteCountAtBlock(
-            proposal.proposer, _blockNumber().sub(1)) < minProposalVoteCount(_blockNumber().sub(1)), "ERR_CANNOT_CANCEL");
+
+        uint votes = calculateAvailableVotes(proposal.proposer, _blockNumber().sub(1));
+
+        require(msg.sender == guardian || votes < minProposalVoteCount(_blockNumber().sub(1)), "ERR_CANNOT_CANCEL");
 
         proposal.canceled = true;
         for (uint i = 0; i < proposal.targets.length; i++) {
@@ -175,7 +186,7 @@ contract PlennyDao is PlennyBasePausableV2, PlennyDaoStorage {
 
     /// @notice Executes a proposal that has been previously queued in a timelock.
     /// @param  _proposalID proposal id
-    function execute(uint _proposalID) external payable whenNotPaused nonReentrant _logs_ {
+    function execute(uint _proposalID) external payable whenNotPaused nonReentrant onlyGovernanceStakers _logs_ {
         require(state(_proposalID) == ProposalState.Queued, "ERR_NOT_QUEUED");
 
         Proposal storage proposal = proposals[_proposalID];
@@ -253,6 +264,12 @@ contract PlennyDao is PlennyBasePausableV2, PlennyDaoStorage {
         votingDelay = value;
     }
 
+    /// @notice Changes the governor threshold. Called by the owner.
+	/// @param 	value threshold value of plenny tokens
+    function setGovernorThreshold(uint256 value) external onlyOwner _logs_ {
+        governorThreshold = value;
+    }
+
     /// @notice Gets the proposal info.
     /// @param  _proposalID proposal id
     /// @return targets addresses of the smart contracts
@@ -327,7 +344,10 @@ contract PlennyDao is PlennyBasePausableV2, PlennyDaoStorage {
         Proposal storage proposal = proposals[_proposalID];
         Receipt storage receipt = proposal.receipts[voter];
         require(!receipt.hasVoted, "ERR_DUPLICATE_VOTE");
-        uint votes = contractRegistry.lockingContract().getUserVoteCountAtBlock(voter, proposal.startBlock);
+
+        uint votes = calculateAvailableVotes(voter, proposal.startBlock);
+
+        require (votes > 0, "ERR_ZERO_VOTES");
 
         if (support) {
             proposal.forVotes = proposal.forVotes.add(votes);
@@ -341,6 +361,21 @@ contract PlennyDao is PlennyBasePausableV2, PlennyDaoStorage {
 
         emit VoteCast(voter, _proposalID, support, votes);
     }
+
+    /// @notice Calculates available votes per user
+    /// @return uint256 available votes
+    function calculateAvailableVotes(address user, uint256 blockNumber) internal view returns (uint256){
+        uint256 availableVotes;
+        if (contractRegistry.lockingContract().checkDelegationAtBlock(user, blockNumber)) {
+            availableVotes = 
+                contractRegistry.lockingContract().getUserDelegatedVoteCountAtBlock(user, blockNumber);
+        } else {
+            availableVotes = 
+                contractRegistry.lockingContract().getUserVoteCountAtBlock(user, blockNumber)
+                .add(contractRegistry.lockingContract().getUserDelegatedVoteCountAtBlock(user, blockNumber));
+        }
+        return availableVotes;
+    }    
 
     /// @notice Alternative block number if on L2.
     /// @return uint256 L1 block number or L2 block number

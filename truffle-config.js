@@ -95,7 +95,8 @@ module.exports = {
       websockets: true,
       gasPrice: gasPrice,
       gas: gasLimit,
-      deploymentPollingInterval: 15000,
+      networkCheckTimeout: 15000,
+      deploymentPollingInterval: 60000,
       disableConfirmationListener: true
     },
     "arbitrum":{
@@ -165,7 +166,8 @@ module.exports = {
     }
   },
   api_keys: {
-    etherscan: process.env.ETHERSCAN_API_KEY
+    etherscan: process.env.ETHERSCAN_API_KEY,
+    arbiscan: process.env.ARBISCAN_API_KEY
   },
   plugins: ["solidity-coverage", "truffle-contract-size", "truffle-plugin-verify"]
 }

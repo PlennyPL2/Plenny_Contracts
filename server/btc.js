@@ -17,10 +17,9 @@ class Btc {
 
     async init() {
         try {
-            const info = await this.client.getBlockchainInfo();
-            logger.info('GetInfo:', info)
+            return await this.client.getBlockchainInfo();
         } catch (err) {
-            logger.error('GetInfo Failed:', err);
+            logger.error('GetInfo Failed: ' + err);
         }
     }
 
@@ -28,23 +27,19 @@ class Btc {
         try {
             return await this.client.getBlockchainInfo();
         } catch (err) {
-            logger.error('Getting Blockchain info error:', err);
+            logger.error('Getting Blockchain info failed: ' + err);
         }
     }
 
     async getTransactionInfo(txId) {
-        try {
-            return await this.client.command('getrawtransaction', txId, true);
-        } catch (err) {
-            logger.error('Getting BTC tx info error:', err);
-        }
+        return await this.client.command('getrawtransaction', txId, true);
     }
 
     async getBlockInfo(blockHash) {
         try {
             return await this.client.command('getblock', blockHash, 1)
         } catch (err) {
-            logger.error('Getting BTC block info error:', err);
+            logger.error('Getting BTC block info failed: ' + err);
         }
     }
 
@@ -52,7 +47,7 @@ class Btc {
         try {
             return await this.client.command('gettxout', txId, index, false);
         } catch (err) {
-            logger.error("Getting BTC unspent info error:", err);
+            logger.error("Getting BTC unspent info failed: " + err);
         }
     }
 }

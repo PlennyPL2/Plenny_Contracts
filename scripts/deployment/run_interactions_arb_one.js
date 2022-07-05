@@ -3,28 +3,19 @@ const {checkAndRetrieveContract} = require('./helper');
 const contract = require('@truffle/contract');
 const Migrations = artifacts.require('Migrations');
 const PlennyFee = checkAndRetrieveArtifact('PlennyRePLENishment');
-const PlennyFeeV3 = checkAndRetrieveArtifact('PlennyRePLENishmentV3');
 const PlennyDao = checkAndRetrieveArtifact('PlennyDao');
-const PlennyERC20 = artifacts.require('PlennyERC20');
 const PlennyOcean = artifacts.require('PlennyOcean');
-const PlennyOceanV2 = artifacts.require('PlennyOceanV2');
 const PlennyReward = artifacts.require('PlennyReward');
 const PlennyStakeGovDelV = artifacts.require('PlennyStakeGovDelV');
 const PlennyStaking = artifacts.require('PlennyStaking');
-const PlennyLockingPoSLT = artifacts.require('PlennyLockingPoSLT');
 const PlennyTreasury = artifacts.require('PlennyTreasury');
 const PlennyLiqMining = artifacts.require('PlennyLiqMining');
-const PlennyLiqStaking = artifacts.require('PlennyLiqStaking');
 const PlennyCoordinator = artifacts.require('PlennyCoordinator');
-const PlennyCoordinatorV2 = artifacts.require('PlennyCoordinatorV2');
 const PlennyDappFactory = artifacts.require('PlennyDappFactory');
-const PlennyDappFactoryV2 = artifacts.require('PlennyDappFactoryV2');
 const PlennyDistribution = artifacts.require('PlennyDistribution');
 const PlennyOracleValidator = artifacts.require('PlennyOracleValidator');
-const PlennyOracleValidatorV2 = artifacts.require('PlennyOracleValidatorV2');
 const PlennyContractRegistry = artifacts.require('PlennyContractRegistry');
 const PlennyValidatorElection = artifacts.require('PlennyValidatorElection');
-const PlennyValidatorElectionV2 = artifacts.require('PlennyValidatorElectionV2');
 
 const UniswapV2FactoryJson = require('@uniswap/v2-core/build/UniswapV2Factory.json');
 const UniswapV2Factory = contract(UniswapV2FactoryJson);
@@ -63,24 +54,24 @@ module.exports = async function (callback) {
 		const blockLimit = process.env.BLOCK_LIMIT ? process.env.BLOCK_LIMIT : 6500;
 
 		// create factory/registry contract
-		const factoryInstance = await checkAndRetrieveContract(PlennyDappFactory, PlennyDappFactoryV2);
+		const factoryInstance = await checkAndRetrieveContract(PlennyDappFactory);
 		const registry = await PlennyContractRegistry.deployed();
 
 		// create SC instances
 		const daoInstance = await checkAndRetrieveContract(PlennyDao);
-		const feeInstance = await checkAndRetrieveContract(PlennyFee, PlennyFeeV3);
-		const oceanInstance = await checkAndRetrieveContract(PlennyOcean, PlennyOceanV2);
+		const feeInstance = await checkAndRetrieveContract(PlennyFee);
+		const oceanInstance = await checkAndRetrieveContract(PlennyOcean);
 		const rewardInstance = await checkAndRetrieveContract(PlennyReward);
 		// Attn: unnecessary contract name change due to staking/locking
 		const lockingInstance = await checkAndRetrieveContract(PlennyStakeGovDelV);
 		const stakingInstance = await checkAndRetrieveContract(PlennyStaking);
-		const miningInstance = await checkAndRetrieveContract(PlennyLiqMining, PlennyLiqStaking);
+		const miningInstance = await checkAndRetrieveContract(PlennyLiqMining);
 
 		const treasuryInstance = await checkAndRetrieveContract(PlennyTreasury);
-		const coordinatorInstance = await checkAndRetrieveContract(PlennyCoordinator, PlennyCoordinatorV2);
-		const validatorInstance = await checkAndRetrieveContract(PlennyOracleValidator, PlennyOracleValidatorV2);
+		const coordinatorInstance = await checkAndRetrieveContract(PlennyCoordinator);
+		const validatorInstance = await checkAndRetrieveContract(PlennyOracleValidator);
 		const distributionInstance = await checkAndRetrieveContract(PlennyDistribution);
-		const electionInstance = await checkAndRetrieveContract(PlennyValidatorElection, PlennyValidatorElectionV2);
+		const electionInstance = await checkAndRetrieveContract(PlennyValidatorElection);
 
 		// deploy uniswap
 		const adapter = Migrations.interfaceAdapter;
@@ -93,18 +84,10 @@ module.exports = async function (callback) {
 		const uniswapAddress = await uniswapRouter.factory();
 
 		const plennyAddress = await distributionInstance.getPlennyTokenAddress();
-		const plennyToken = await PlennyERC20.at(plennyAddress);
 		const wEthAddress = await uniswapRouter.WETH();
 		const uniswapInstance = await UniswapV2Factory.at(uniswapAddress);
 
 		let getPairAddress = await uniswapInstance.getPair(wEthAddress, plennyAddress);
-		if (actions.includes('createPair')) {
-			await uniswapInstance.createPair(wEthAddress, plennyAddress, {from: accounts[0], gasPrice: gasPrice, gasLimit: gasLimit});
-			logger.info('UniSwap pool created using WETH/PL2 tokens.');
-
-			getPairAddress = await uniswapInstance.getPair(wEthAddress, plennyAddress);
-			logger.info('Got pool pair address.', getPairAddress);
-		}
 
 		const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
@@ -159,107 +142,6 @@ module.exports = async function (callback) {
 			}
 
 			logger.info('Initialized the addresses in the registry');
-		}
-
-		if (actions.includes('createDefaultValidator')) {
-			await factoryInstance.createDefaultValidator(
-				process.env.DEFAULT_ORACLE_PUBLIUC_KEY,
-				process.env.DEFAULT_ORACLE_NAME,
-				process.env.DEFAULT_ORACLE_NODE_IP,
-				process.env.DEFAULT_ORACLE_NODE_PORT,
-				process.env.DEFAULT_ORACLE_SERVICE_URL,
-				process.env.DEFAULT_ORACLE_ACCOUNT
-			);
-			logger.info('Default oracle created.');
-		}
-
-		if (actions.includes('addMinter')) {
-			if (typeof feeInstance !== 'undefined') {
-				await plennyToken.addMinter(feeInstance.address, {gasPrice: gasPrice, gasLimit: gasLimit});
-				logger.info('Minter added', feeInstance.address);
-			}
-		}
-
-		if (actions.includes('addMintAddress')) {
-			if (typeof feeInstance !== 'undefined') {
-				await plennyToken.addMintAddress(feeInstance.address, {gasPrice: gasPrice, gasLimit: gasLimit});
-				logger.info('Mint address added', feeInstance.address);
-			}
-		}
-
-		if (actions.includes('toggleWhitelisting')) {
-			await plennyToken.toggleWhitelisting(true, {gasPrice: gasPrice, gasLimit: gasLimit});
-			logger.info('Token whitelisting is on.');
-		}
-
-		if (actions.includes('setUserChannelRewardPeriod')) {
-			let periodInSeconds = 300;
-
-			await factoryInstance.setUserChannelRewardPeriod(periodInSeconds, {from: accounts[0], gasPrice: gasPrice, gasLimit: gasLimit});
-			logger.info(`User channel reward period set to ${periodInSeconds}`);
-		}
-
-		if (actions.includes('setNextDistributionSeconds')) {
-			let periodInSeconds = 300;
-
-			if (typeof lockingInstance !== 'undefined') {
-				await lockingInstance.setNextDistributionBlocks(periodInSeconds, {from: accounts[0], gasPrice: gasPrice, gasLimit: gasLimit});
-				logger.info(`Governance next distribution set to ${periodInSeconds}`);
-			}
-
-			if (typeof miningInstance !== 'undefined') {
-				await miningInstance.setNextDistributionSeconds(periodInSeconds, {from: accounts[0], gasPrice: gasPrice, gasLimit: gasLimit});
-				logger.info(`Liquidity Mining next distribution set to ${periodInSeconds}`);
-			}
-		}
-
-		if (actions.includes('setMaintenanceBlockLimit')) {
-
-			if (typeof feeInstance !== 'undefined') {
-				await feeInstance.setMaintenanceBlockLimit(blockLimit, {from: accounts[0], gasPrice: gasPrice, gasLimit: gasLimit});
-				logger.info(`Replenish Treasury period has been set to ${blockLimit} block(s)`);
-			}
-		}
-
-		if (actions.includes('setNewElectionPeriod')) {
-
-			await electionInstance.setNewElectionPeriod(electionPeriod, {from: accounts[0], gasPrice: gasPrice, gasLimit: gasLimit});
-			logger.info(`Election period has been set to ${electionPeriod} block(s)`);
-		}
-
-		if (actions.includes('setElectionTriggerUserReward')) {
-			let userReward = '1000';
-
-			await electionInstance.setElectionTriggerUserReward(Web3.utils.toWei(userReward), {from: accounts[0], gasPrice: gasPrice, gasLimit: gasLimit});
-			logger.info(`Election user trigger reward has been set to ${userReward}`);
-		}
-
-		if (actions.includes('setMaximumChannelCapacity')) {
-			let newMaximum = 16000000;
-
-			await coordinatorInstance.setMaximumChannelCapacity(newMaximum, {from: accounts[0], gasPrice: gasPrice, gasLimit: gasLimit});
-			logger.info(`Maximum channel capacity has been set to ${newMaximum} sat`);
-		}
-
-		if (actions.includes('setMinimumChannelCapacity')) {
-			let newMinimum = 20000;
-
-			await coordinatorInstance.setMinimumChannelCapacity(newMinimum, {from: accounts[0], gasPrice: gasPrice, gasLimit: gasLimit});
-			logger.info(`Minimum channel capacity has been set to ${newMinimum} sat`);
-		}
-
-		if (actions.includes('setChannelRewardThreshold')) {
-			let newThreshold = 500000;
-
-			await coordinatorInstance.setChannelRewardThreshold(newThreshold, {from: accounts[0], gasPrice: gasPrice, gasLimit: gasLimit});
-			logger.info(`Channel Reward threshold has been set to ${newThreshold} sat`);
-		}
-
-		if (actions.includes('setRewardBaseline')) {
-			let rewardBaseline = '250';
-
-			await coordinatorInstance.setRewardBaseline(Web3.utils.toWei(rewardBaseline), {from: accounts[0], gasPrice: gasPrice, gasLimit: gasLimit});
-			logger.info(`Reward baseline has been set to ${rewardBaseline}`);
 		}
 
 		callback();

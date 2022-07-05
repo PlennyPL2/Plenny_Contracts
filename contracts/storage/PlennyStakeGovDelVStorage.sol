@@ -4,9 +4,9 @@ pragma solidity >=0.6.0 <0.8.0;
 
 import "../interfaces/IPlennyLocking.sol";
 
-/// @title  PlennyLockingStorage
-/// @notice Storage contract for PlennyLocking
-abstract contract PlennyLockingStorage is IPlennyLocking {
+/// @title  PlennyStakeGovDelVStorage
+/// @notice Storage contract for PlennyStakeGovDelV
+abstract contract PlennyStakeGovDelVStorage is IPlennyLocking {
 
     /// @notice weight multiplier
     uint256 public constant WEIGHT_MULTIPLIER = 100;
@@ -21,13 +21,13 @@ abstract contract PlennyLockingStorage is IPlennyLocking {
     /// @notice reward percentage
     uint256 public override govLockReward; // 0.01%
     /// @notice distribution period, in blocks
-    uint256 public nextDistributionSeconds; // 1 day
+    uint256 public nextDistributionBlocks; // 1 day
     /// @notice blocks per week
-    uint256 public averageBlockCountPerWeek; // 1 week
+    uint256 public averageBlocksPerWeek; // 1 week
 
-    /// @notice Withdrawal fee in % * 100
-    uint256 public withdrawFee;
-    /// @notice exit fee, charged when the user withdraws its locked plenny
+    /// @notice exit fee, charged when the user unlocks its locked plenny
+    uint256 public exitFee;
+    /// @notice locking fee, charged when collecting the rewards
     uint256 public lockingFee;
     /// @notice number of total votes checkpoints
     uint public totalVoteNumCheckpoints;
@@ -46,6 +46,8 @@ abstract contract PlennyLockingStorage is IPlennyLocking {
     mapping(address => uint256) public userValueLocked;
     /// @notice votes per user
     mapping(address => uint256) public userVoteCount;
+    /// @notice delegated votes per user
+    mapping(address => uint256) public userDelegatedVotesCount;
 
     /// @notice total votes
     mapping (uint => Checkpoint) public totalVoteCount;
@@ -56,6 +58,11 @@ abstract contract PlennyLockingStorage is IPlennyLocking {
     mapping(address => uint256) public userLockedPeriod;
     /// @notice collected period per user
     mapping(address => uint256) public userLastCollectedPeriod;
+
+    /// @notice has delegated to other governor
+    mapping(address => bool) public hasDelegated;
+    /// @notice delegation info for the given delegator address
+    mapping(address => MyDelegationInfo) public myDelegatedGovernor;
 
     struct LockedRecord {
         address owner;
@@ -69,5 +76,12 @@ abstract contract PlennyLockingStorage is IPlennyLocking {
     struct Checkpoint {
         uint fromBlock;
         uint voteCount;
+        uint delegatedVoteCount;
+        bool isDelegating;
+    }
+
+    struct MyDelegationInfo {
+        uint256 delegationIndex;
+        address governor;
     }
 }

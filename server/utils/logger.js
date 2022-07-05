@@ -36,7 +36,10 @@ const logConfiguration = {
     )
 };
 
+const logger = winston.createLogger(logConfiguration);
+logger.level = process.env.LOG_LEVEL || 'info';
+
 module.exports = {
-    logger: winston.createLogger(logConfiguration),
+    logger: logger,
     accessLogStream: fs.createWriteStream(path.join(__dirname, '../logs/access.log'), {flags: 'a'})
 }

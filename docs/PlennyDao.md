@@ -14,6 +14,12 @@ Governs the Dapp via voting on community proposals.
 
    Emits log event of the function calls.
 
+### `onlyGovernanceStakers()`
+
+
+
+Checks if a staked balance of a user is above threshold
+
 
 
 ### `initialize(address _registry)` (external)
@@ -217,6 +223,17 @@ Changes the proposal voting delay.
 
 
 
+### `setGovernorThreshold(uint256 value)` (external)
+
+Changes the governor threshold. Called by the owner.
+
+
+
+
+- `value`: threshold value of plenny tokens
+
+
+
 ### `getActions(uint256 _proposalID) → address[] targets, uint256[] values, string[] signatures, bytes[] calldatas` (external)
 
 Gets the proposal info.
@@ -299,6 +316,7 @@ Maximum number of actions in a proposal.
 
 
 **Returns**: uint: number of actions
+
 
 
 

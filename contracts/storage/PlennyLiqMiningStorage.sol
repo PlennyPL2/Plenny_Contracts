@@ -26,9 +26,9 @@ contract PlennyLiqMiningStorage is IPlennyLiqMining {
     /// @notice maximum locking period, in blocks
     uint256 public maxPeriodWeek; // 10 years
 
-    /// @notice  Withdrawal fee in % * 100
+    /// @notice Fee charged when collecting the rewards
     uint256 public liquidityMiningFee;
-    /// @notice exit fee, charged when the user withdraws its locked LPs
+    /// @notice exit fee, charged when the user unlocks its locked LPs
     uint256 public fishingFee;
 
     /// @notice mining reward percentage

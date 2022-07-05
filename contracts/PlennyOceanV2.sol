@@ -28,6 +28,8 @@ contract PlennyOceanV2 is PlennyBasePausableV2, PlennyOceanStorage {
     event LogCall(bytes4  indexed sig, address indexed caller, bytes data) anonymous;
     /// An event emitted when Liquidity Maker is added.
     event MakerAdded(address account, bool created);
+    /// An event emitted when Liquidity Maker is removed.
+    event MakerRemoved(address account);
 
     /// @dev    Only PlennyCoordinator contract checks.
     modifier onlyCoordinator {
@@ -58,6 +60,27 @@ contract PlennyOceanV2 is PlennyBasePausableV2, PlennyOceanStorage {
             makers[index] = MakerInfo(name, serviceUrl, msg.sender, nodeIndex, providingAmount, priceInPl2);
         }
         emit MakerAdded(msg.sender, index == 0);
+    }
+
+    /// @notice Removes an existing maker from the ocean.
+    function removeMaker() external whenNotPaused {
+        uint256 index = makerIndexPerAddress[msg.sender];
+        require(index != 0, "ERR_NOT_MAKER");
+
+        uint256 lastIndex = makersCount;
+        address lastAddress = makers[lastIndex].makerAddress;
+        makersCount--;
+
+        if (lastIndex == index && lastAddress == msg.sender) {
+            delete makerIndexPerAddress[lastAddress];
+            delete makers[index];
+        } else {
+            makers[index] = makers[lastIndex];
+            makerIndexPerAddress[lastAddress] = index;
+            makerIndexPerAddress[msg.sender] = 0;
+        }
+
+        emit MakerRemoved(msg.sender);
     }
 
     /// @notice Called by the maker whenever there is a new request for channel capacity signed by the taker.
@@ -200,6 +223,18 @@ contract PlennyOceanV2 is PlennyBasePausableV2, PlennyOceanStorage {
     /// @param  value fee
     function setTakerFee(uint256 value) external onlyOwner {
         takerFee = value;
+    }
+
+    /// @notice Changes the Maker Fixed Royalty. Called by the owner
+    /// @param  value fee
+    function setMakerCapacityOneTimeReward(uint256 value) external onlyOwner {
+        makerCapacityOneTimeReward = value;
+    }
+
+    /// @notice Changes the Maker Reward Fee. Called by the owner
+    /// @param  value fee
+    function setMakerRewardFee(uint256 value) external onlyOwner {
+        makerRewardFee = value;
     }
 
     /// @notice Gets the ids of liquidity requests for the given maker address.

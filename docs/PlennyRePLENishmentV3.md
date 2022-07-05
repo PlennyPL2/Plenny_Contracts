@@ -20,7 +20,7 @@ Receives payment
 
 
 
-### `rePLENishmentJob()` (external)
+### `plennyReplenishment()` (external)
 
 Runs the re-distribution of the fees by sending all the fees directly to the Treasury HODL.
 

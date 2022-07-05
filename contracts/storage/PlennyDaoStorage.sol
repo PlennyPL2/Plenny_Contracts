@@ -17,6 +17,8 @@ contract PlennyDaoStorage {
     uint public minQuorum;
     // The % of votes required in order for a voter to become a proposer / BASE
     uint public proposalThreshold;
+    // The amount of locked tokens required in order for a voter to add, queue, or execute a proposal
+    uint public governorThreshold; 
 
     /// The EIP-712 typehash for the contract's domain
     bytes32 public constant DOMAIN_TYPEHASH = keccak256("EIP712Domain(string name,uint256 chainId,address verifyingContract)");
@@ -26,9 +28,9 @@ contract PlennyDaoStorage {
 
     mapping (bytes32 => bool) public queuedTransactions;
 
-    uint public constant GRACE_PERIOD = 93046;   // blocks count, 14 days approximately
+    uint public constant GRACE_PERIOD = 91000;   // blocks count, 14 days approximately
     uint public constant MINIMUM_DELAY = 10;     // blocks count, 2 minutes approximately
-    uint public constant MAXIMUM_DELAY = 199384; // blocks count, 30 days approximately
+    uint public constant MAXIMUM_DELAY = 195000; // blocks count, 30 days approximately
     uint64 public delay;
 
     address public guardian;

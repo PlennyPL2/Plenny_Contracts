@@ -39,7 +39,7 @@ contract PlennyRePLENishmentV3 is PlennyBasePausableV2, PlennyFeeStorage {
 	}
 
 	/// @notice Runs the re-distribution of the fees by sending all the fees directly to the Treasury HODL.
-	function rePLENishmentJob() external nonReentrant {
+	function plennyReplenishment() external nonReentrant {
 		require(_blockNumber().sub(lastMaintenanceBlock) > maintenanceBlockLimit, "ERR_DAILY_LIMIT");
 
 		IUniswapV2Pair lpContract = contractRegistry.lpContract();
@@ -50,8 +50,9 @@ contract PlennyRePLENishmentV3 is PlennyBasePausableV2, PlennyFeeStorage {
 
 		jobIdCount++;
 		jobs[jobIdCount] = _blockNumber();
-		uint256 userReward;
+		lastMaintenanceBlock = jobs[jobIdCount];
 
+		uint256 userReward;
 		address treasuryAddress = contractRegistry.requireAndGetAddress("PlennyTreasury");
 
 		if (lpBalance > lpThresholdForBurning) {
@@ -76,7 +77,6 @@ contract PlennyRePLENishmentV3 is PlennyBasePausableV2, PlennyFeeStorage {
 		}
 
 		uint256 mintedPlenny = mintDailyInflation(jobIdCount);
-		lastMaintenanceBlock = jobs[jobIdCount];
 		userReward = mintedPlenny.mul(dailyInflationRewardPercentage).div(100).div(100);
 		plennyToken.safeTransfer(msg.sender, userReward);
 		plennyToken.safeTransfer(treasuryAddress, mintedPlenny.sub(userReward));
@@ -138,8 +138,9 @@ contract PlennyRePLENishmentV3 is PlennyBasePausableV2, PlennyFeeStorage {
 	/// @param 	jobId maintenance job Id
 	/// @return	mintedPlenny tokens minted as a result of the daily inflation
 	function mintDailyInflation(uint jobId) private returns (uint256 mintedPlenny) {
-		uint256 jobBlock = jobs[jobId];
-		uint256 mintingAmount = jobBlock.sub(lastMaintenanceBlock).mul(inflationAmountPerBlock);
+		uint256 currBlock = jobs[jobId];
+		uint256 lastBlock = jobId > 0 ? jobs[jobId - 1] : jobs[0];
+		uint256 mintingAmount = currBlock.sub(lastBlock).mul(inflationAmountPerBlock);
 
 		contractRegistry.plennyTokenContract().mint(address(this), mintingAmount);
 		return mintingAmount;

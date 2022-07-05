@@ -1,11 +1,13 @@
 ---
-title: PlennyLocking.sol Spec
-id: PlennyLocking
+title: PlennyStakeGovDelV.sol Spec
+id: PlennyStakeGovDelV
 ---
 
- PlennyLocking
+PlennyStakeGovDelV
+(PlennyLocking in BETA release.)
 
-Manages the locked balances in Plenny for DAO governance.
+Manages staking for governance and the delegation of voting rights.
+        Attn: The storage contract refers to governance staking (not locking).
 
 
 ### `_logs_()`
@@ -93,7 +95,7 @@ Removes a delegation.
 
 
 
-### `setNextDistributionSeconds(uint256 amount)` (external)
+### `setNextDistributionBlocks(uint256 amount)` (external)
 
 Changes the next distribution in seconds. Managed by the contract owner
 
@@ -137,7 +139,7 @@ Changes the locking Fee multiplier. Managed by the contract owner.
 
 
 
-### `setAverageBlockCountPerWeek(uint256 count)` (external)
+### `setAverageBlocksPerWeek(uint256 count)` (external)
 
 Changes average block counts per week. Managed by the contract owner.
 

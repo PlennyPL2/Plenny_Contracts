@@ -17,18 +17,19 @@ class Lnd {
     }
 
     init() {
+        this.client = new this.lnrpc.Lightning(process.env.LND_HOST_PORT, this.credentials);
         this._unlockWallet();
     }
 
     async getInfo() {
-        logger.info('Getting LND info...');
+        logger.info('Getting node info');
 
         return new Promise((resolve, reject) => {
             this.client.getInfo({}, (err, res) => {
                 if (!err) {
                     resolve(res);
                 } else {
-                    logger.error('GetInfoFailed', err);
+                    logger.error('GetInfoFailed: ' + err);
                     reject(err);
                 }
             });
@@ -36,14 +37,14 @@ class Lnd {
     };
 
     async getChannelInfo(channelId) {
-        logger.info('Getting LND channel info');
+        logger.debug('Getting channel info for channelId: ' + channelId);
 
         return new Promise((resolve, reject) => {
             this.client.getChanInfo({chan_id: channelId}, (err, res) => {
                 if (!err) {
                     resolve(res);
                 } else {
-                    logger.error('GetChanInfoFailed', err);
+                    logger.error('GetChanInfoFailed: ' + err);
                     reject(err);
                 }
             });
@@ -51,7 +52,7 @@ class Lnd {
     }
 
     getLightningNodeInfo() {
-        logger.info('Getting Node info');
+        logger.info('Getting wallet balance info');
 
         return new Promise(async (resolve, reject) => {
             const node = await this.getInfo();
@@ -64,7 +65,7 @@ class Lnd {
                     };
                     resolve(nodeInfo);
                 } else {
-                    logger.error('GetWalletBalanceFailed', err);
+                    logger.error('GetWalletBalanceFailed: ' + err);
                     reject(err);
                 }
             });
@@ -87,10 +88,10 @@ class Lnd {
                 }
 
                 if (err && err.details.includes('already connected to peer:')) {
-                    logger.info('already connected to peer.');
+                    logger.debug('Already connected to peer.');
                     resolve();
                 } else {
-                    logger.error('connectPeer failed', err);
+                    logger.error('connectPeer failed: ' + err);
                     reject(err);
                 }
             });
@@ -110,6 +111,19 @@ class Lnd {
         return this.client.openChannel(request);
     }
 
+    closeChannel(channelPoint, outputIndex) {
+        logger.info('Closing channel');
+
+        let request = {
+            channel_point: {
+                funding_txid_str: channelPoint,
+                output_index: Number(outputIndex)
+            },
+        };
+
+        return this.client.closeChannel(request);
+    }
+
     async listChannels() {
         logger.info('Listing LND channels');
 
@@ -118,7 +132,7 @@ class Lnd {
                 if (!err) {
                     resolve(res);
                 } else {
-                    logger.error('LND listChannelFailed:', err);
+                    logger.error('LND listChannelFailed: ' + err);
                     reject(err);
                 }
             });
@@ -133,7 +147,7 @@ class Lnd {
                 if (!err) {
                     resolve(res);
                 } else {
-                    logger.error('GetWalletBalanceFailed', err);
+                    logger.error('GetWalletBalanceFailed: ' + err);
                     reject(err);
                 }
             });
@@ -185,7 +199,7 @@ class Lnd {
     _getCredentials() {
         // combine the cert credentials and the macaroon auth credentials
         // such that every call is properly encrypted and authenticated
-        logger.info('Reading certificate credentials...');
+        logger.debug('Reading certificate credentials...');
         return grpc.credentials.combineChannelCredentials(this._buildSslCredentials(), this._buildMacaroonCredentials());
     }
 
@@ -195,22 +209,15 @@ class Lnd {
         new this.lnrpc.WalletUnlocker(process.env.LND_HOST_PORT, this.credentials)
             .unlockWallet({wallet_password: passByte}, (unlockerr, unlockres) => {
                 if (!unlockerr) {
-                    logger.info('UnlockWallet:', unlockres);
-                } else if (unlockerr.toString() === 'Error: 12 UNIMPLEMENTED: unknown service lnrpc.WalletUnlocker') {
-                    logger.info('Wallet already unlocked');
+                    logger.debug('UnlockWallet: ' + unlockres);
+                } else if (
+                    unlockerr.toString().includes('wallet already unlocked') ||
+                    unlockerr.toString().includes('Error: 12 UNIMPLEMENTED: unknown service lnrpc.WalletUnlocker')
+                ) {
+                    logger.debug('Wallet already unlocked');
                 } else {
                     logger.error('UnlockWalletFailed:', unlockerr);
                 }
-
-                // test client info
-                this.client = new this.lnrpc.Lightning(process.env.LND_HOST_PORT, this.credentials);
-                this.client.getInfo({}, (err, res) => {
-                    if (!err) {
-                        logger.info('Wallet unlocked check & GetInfo:', res);
-                    } else {
-                        logger.error('GetInfoFailed:', err);
-                    }
-                });
             });
     }
 }
