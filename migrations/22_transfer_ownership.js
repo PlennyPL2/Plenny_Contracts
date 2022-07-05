@@ -62,25 +62,25 @@ module.exports = async function (deployer, network, accounts) {
         === proxyAdmin) {
         // minters & pausers
         if (actions.includes("addPauser")) {
-            // if (typeof factoryInstance !== "undefined") {
-            //     await factoryInstance.addPauser(newAdmin, {gasPrice: gasPrice});
-            //     logger.info(`Contract: ${factoryInstance.address} ==> Pauser: ${newAdmin}`);
-            // }
+             if (typeof factoryInstance !== "undefined") {
+                 await factoryInstance.addPauser(newAdmin, {gasPrice: gasPrice});
+                 logger.info(`Contract: ${factoryInstance.address} ==> Pauser: ${newAdmin}`);
+             }
 
-            // if (typeof validatorInstance !== "undefined") {
-            //     await validatorInstance.addPauser(newAdmin, {gasPrice: gasPrice});
-            //     logger.info(`Contract: ${validatorInstance.address} ==> Pauser: ${newAdmin}`);
-            // }
+             if (typeof validatorInstance !== "undefined") {
+                 await validatorInstance.addPauser(newAdmin, {gasPrice: gasPrice});
+                 logger.info(`Contract: ${validatorInstance.address} ==> Pauser: ${newAdmin}`);
+             }
 
-            // if (typeof treasuryInstance !== "undefined") {
-            //     await treasuryInstance.addPauser(newAdmin, {gasPrice: gasPrice});
-            //     logger.info(`Contract: ${treasuryInstance.address} ==> Pauser: ${newAdmin}`);
-            // }
+             if (typeof treasuryInstance !== "undefined") {
+                 await treasuryInstance.addPauser(newAdmin, {gasPrice: gasPrice});
+                 logger.info(`Contract: ${treasuryInstance.address} ==> Pauser: ${newAdmin}`);
+             }
 
-            // if (typeof plennyToken !== "undefined") {
-            //     await plennyToken.addPauser(newAdmin, {gasPrice: gasPrice});
-            //     logger.info(`Contract: ${plennyToken.address} ==> Pauser: ${newAdmin}`);
-            // }
+             if (typeof plennyToken !== "undefined") {
+                 await plennyToken.addPauser(newAdmin, {gasPrice: gasPrice});
+                 logger.info(`Contract: ${plennyToken.address} ==> Pauser: ${newAdmin}`);
+             }
 
             if (typeof plennyToken !== "undefined") {
                 await plennyToken.addMinter(newAdmin, {gasPrice: gasPrice});
@@ -158,10 +158,10 @@ module.exports = async function (deployer, network, accounts) {
 
         // The owner of the ProxyAdmin can upgrade our contracts
         
-        // if (actions.includes("transferAdminOwnership") && typeof daoInstance !== "undefined") {
-        //     await admin.transferProxyAdminOwnership(newAdmin, {gasPrice: gasPrice});
-        //     logger.info("Transfer Proxy Admin ownership succeeded");
-        // }
+         if (actions.includes("transferAdminOwnership") && typeof daoInstance !== "undefined") {
+             await admin.transferProxyAdminOwnership(newAdmin, {gasPrice: gasPrice});
+             logger.info("Transfer Proxy Admin ownership succeeded");
+         }
     } else {
         throw 'Caller is not the owner!'
     }

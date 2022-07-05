@@ -14,7 +14,6 @@ const PlennyStaking = artifacts.require('PlennyStaking');
 const PlennyLockingPoSLT = artifacts.require('PlennyLockingPoSLT');
 const PlennyTreasury = artifacts.require('PlennyTreasury');
 const PlennyLiqMining = artifacts.require('PlennyLiqMining');
-const PlennyLiqStaking = artifacts.require('PlennyLiqStaking');
 const PlennyCoordinator = artifacts.require('PlennyCoordinator');
 const PlennyCoordinatorV2 = artifacts.require('PlennyCoordinatorV2');
 const PlennyDappFactory = artifacts.require('PlennyDappFactory');
@@ -74,7 +73,7 @@ module.exports = async function (callback) {
 		// Attn: unnecessary contract name change due to staking/locking
 		const lockingInstance = await checkAndRetrieveContract(PlennyStakeGovDelV);
 		const stakingInstance = await checkAndRetrieveContract(PlennyStaking);
-		const miningInstance = await checkAndRetrieveContract(PlennyLiqMining, PlennyLiqStaking);
+		const miningInstance = await checkAndRetrieveContract(PlennyLiqMining);
 
 		const treasuryInstance = await checkAndRetrieveContract(PlennyTreasury);
 		const coordinatorInstance = await checkAndRetrieveContract(PlennyCoordinator, PlennyCoordinatorV2);
@@ -114,7 +113,7 @@ module.exports = async function (callback) {
 			getPairAddress || ZERO_ADDRESS,
 			wEthAddress || ZERO_ADDRESS,
 			coordinatorInstance ? coordinatorInstance.address : ZERO_ADDRESS,
-			miningInstance ? miningInstance.address : ZERO_ADDRESS, // PlennyLiqStaking
+			miningInstance ? miningInstance.address : ZERO_ADDRESS,
 			daoInstance ? daoInstance.address : ZERO_ADDRESS,
 			validatorInstance ? validatorInstance.address : ZERO_ADDRESS,
 			oceanInstance ? oceanInstance.address : ZERO_ADDRESS,
@@ -136,7 +135,7 @@ module.exports = async function (callback) {
 					Web3.utils.asciiToHex('UNIETH-PL2'),
 					Web3.utils.asciiToHex('WETH'),
 					Web3.utils.asciiToHex('PlennyCoordinator'),
-					Web3.utils.asciiToHex('PlennyLiqMining'), // PlennyLiqStaking
+					Web3.utils.asciiToHex('PlennyLiqMining'),
 					Web3.utils.asciiToHex('PlennyDao'),
 					Web3.utils.asciiToHex('PlennyOracleValidator'),
 					Web3.utils.asciiToHex('PlennyOcean'),
