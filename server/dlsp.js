@@ -29,48 +29,43 @@ const privateKeyProvider = new HDWalletProvider(process.env.ETH_PRIV_KEY, proces
 const ALLOW_AUTO_CLOSING_CHANNELS = process.env.ALLOW_AUTO_CLOSING_CHANNELS;
 const CHANNEL_FAILED_ATTEMPTS_LIMIT = process.env.CHANNEL_FAILED_ATTEMPTS_LIMIT || 3;
 const DELAY_CHANNEL_PROCESSING = process.env.DELAY_CHANNEL_PROCESSING || 1000;
-const MAX_RETRIES = process.env.MAX_RETRIES ? process.env.MAX_RETRIES : 3;
-const RETRY_INTERVAL = process.env.RETRY_INTERVAL ? process.env.RETRY_INTERVAL : 1000;
-const RETRY_JITTER = process.env.RETRY_JITTER ? process.env.RETRY_JITTER : 250;
+const MAX_RETRIES = process.env.MAX_RETRIES || 3;
+const RETRY_INTERVAL = process.env.RETRY_INTERVAL || 1000;
+const RETRY_JITTER = process.env.RETRY_JITTER || 250;
 
 // Validator & Maker
 class Dlsp {
 
     constructor() {
-        this.web3 = createAlchemyWeb3(process.env.LOCAL_RPC_URL,
-            {
-                writeProvider: privateKeyProvider,
-                maxRetries: MAX_RETRIES,
-                retryInterval: RETRY_INTERVAL,
-                retryJitter: RETRY_JITTER
-            }
-        );
+        this.web3 = createAlchemyWeb3(process.env.LOCAL_RPC_URL, {
+            writeProvider: privateKeyProvider,
+            maxRetries: MAX_RETRIES,
+            retryInterval: RETRY_INTERVAL,
+            retryJitter: RETRY_JITTER
+        });
 
-        this.web3L1 = createAlchemyWeb3(process.env.L1_RPC_URL,
-            {
-                writeProvider: privateKeyProvider,
-                maxRetries: MAX_RETRIES,
-                retryInterval: RETRY_INTERVAL,
-                retryJitter: RETRY_JITTER
-            }
-        );
+        this.web3L1 = createAlchemyWeb3(process.env.L1_RPC_URL, {
+            writeProvider: privateKeyProvider,
+            maxRetries: MAX_RETRIES,
+            retryInterval: RETRY_INTERVAL,
+            retryJitter: RETRY_JITTER
+        });
 
-        this.webWS = createAlchemyWeb3(process.env.SOCKET_RPC_URL,
-            {
-                writeProvider: privateKeyProvider,
-                maxRetries: MAX_RETRIES,
-                retryInterval: RETRY_INTERVAL,
-                retryJitter: RETRY_JITTER
-            }
-        );
+        this.webWS = createAlchemyWeb3(process.env.SOCKET_RPC_URL, {
+            writeProvider: privateKeyProvider,
+            maxRetries: MAX_RETRIES,
+            retryInterval: RETRY_INTERVAL,
+            retryJitter: RETRY_JITTER
+        });
 
-        this.pendingChannelIndexes = [];
-        this.activeChannelIndexes = [];
-        this.pendingCapacityIndexes = [];
+        this.pendingChannelIndexes = new Set();
+        this.activeChannelIndexes = new Set();
+        this.pendingCapacityIndexes = new Set();
     }
 
     async init() {
         this.accounts = await this.web3.eth.getAccounts();
+
         // Get contract websocket and http instances
         const [
             oceanWs, escrowWs, oracleValidatorWs, validatorElectionWS,
@@ -214,7 +209,7 @@ class Dlsp {
         if (this.escrowWs) {
             this.escrowWs.LightningChannelOpeningPending().on('data', event => {
                 const channelIndex = event.returnValues.channelIndex;
-                this._pushIfNotExists(this.pendingChannelIndexes, channelIndex.toString());
+                this.pendingChannelIndexes.add(channelIndex.toString());
             });
         }
 
@@ -222,22 +217,22 @@ class Dlsp {
             this.oracleValidatorWs.ChannelOpeningCommit().on('data', event => {
                 const channelIndex = event.returnValues.channelIndex;
                 logger.debug('Channel commit event: ' + channelIndex);
-                this._pushIfNotExists(this.pendingChannelIndexes, channelIndex.toString());
+                this.pendingChannelIndexes.add(channelIndex.toString());
             });
             this.oracleValidatorWs.ChannelOpeningVerify().on('data', event => {
                 const channelIndex = event.returnValues.channelIndex;
                 logger.debug('Channel verify event: ' + channelIndex);
-                this._pushIfNotExists(this.pendingChannelIndexes, channelIndex.toString());
+                this.pendingChannelIndexes.add(channelIndex.toString());
             });
             this.oracleValidatorWs.ChannelClosingCommit().on('data', event => {
                 const channelIndex = event.returnValues.channelIndex;
                 logger.debug('Channel close commit event: ' + channelIndex);
-                this._pushIfNotExists(this.activeChannelIndexes, channelIndex.toString());
+                this.activeChannelIndexes.add(channelIndex.toString());
             });
             this.oracleValidatorWs.ChannelClosingVerify().on('data', event => {
                 const channelIndex = event.returnValues.channelIndex;
                 logger.debug('Channel close verify event: ' + channelIndex);
-                this._pushIfNotExists(this.activeChannelIndexes, channelIndex.toString());
+                this.activeChannelIndexes.add(channelIndex.toString());
             });
         }
     }
@@ -257,20 +252,23 @@ class Dlsp {
                 // Tracking failed attempts to process channel per channelIndex.
                 let failedAttemptsCount = 0;
                 try {
-                    failedAttemptsCount = await db.get(`failedAttempt_${j}`);
+                    failedAttemptsCount = await db.get(`failed_channel_attempts_${j}`);
                 } catch (e) {
                     // swallow
                 }
 
-                if (failedAttemptsCount < CHANNEL_FAILED_ATTEMPTS_LIMIT
-                    && Number(req.status) === 0 && ((currentBlock - parseFloat(req.appliedDate.toString())) < expirePeriod)) {
-                    this._pushIfNotExists(this.pendingChannelIndexes, String(j));
+                if (
+                    Number(failedAttemptsCount) <= Number(CHANNEL_FAILED_ATTEMPTS_LIMIT) &&
+                    Number(req.status) === 0 &&
+                    ((Number(currentBlock) - Number(req.appliedDate)) < Number(expirePeriod))
+                ) {
+                    this.pendingChannelIndexes.add(String(j));
                 } else {
-                    this.pendingChannelIndexes = this.pendingChannelIndexes.filter(item => item !== String(j));
+                    this.pendingChannelIndexes.delete(String(j));
                 }
             }
 
-            logger.info("Pending channel indexes: " + this.pendingChannelIndexes);
+            logger.info("Pending channel indexes: " + [...this.pendingChannelIndexes]);
         } catch (err) {
             logger.error('getPendingChannels failed: ' + err);
         }
@@ -284,7 +282,7 @@ class Dlsp {
             const answered = await this.oracleValidator.oracleOpenChannelAnswers(channelIndex, account, {from: account});
             if (answered) {
                 logger.error('Already answered');
-                this.pendingChannelIndexes = this.pendingChannelIndexes.filter(item => item !== channelIndex.toString());
+                this.pendingChannelIndexes.delete(channelIndex.toString());
             }
 
             const [channel, currentBlock, expirePeriod] = await Promise.all([
@@ -296,24 +294,24 @@ class Dlsp {
             // if channel is already opened --> exit
             if (Number(channel.status) === 1) {
                 logger.error('Channel already opened');
-                this.pendingChannelIndexes = this.pendingChannelIndexes.filter(item => item !== channelIndex.toString());
+                this.pendingChannelIndexes.delete(channelIndex.toString());
             }
 
             // if channel expired --> exit
             if ((currentBlock - channel.creationDate) > expirePeriod) {
                 logger.error('Channel expired: ' + channel);
-                this.pendingChannelIndexes = this.pendingChannelIndexes.filter(item => item !== channelIndex.toString());
+                this.pendingChannelIndexes.delete(channelIndex.toString());
             }
 
             // Tracking failed attempts to process channel per channelIndex.
             let failedAttemptsCount = 0;
             try {
-                failedAttemptsCount = await db.get(`failedAttempt_${channelIndex}`);
+                failedAttemptsCount = await db.get(`failed_channel_attempts_${channelIndex}`);
             } catch (e) {
                 // ignore
             }
 
-            if (failedAttemptsCount < CHANNEL_FAILED_ATTEMPTS_LIMIT) {
+            if (Number(failedAttemptsCount) <= Number(CHANNEL_FAILED_ATTEMPTS_LIMIT)) {
                 // we passed all checks proceed with channel processing
                 const channelPoint = channel.channelPoint.toString();
                 const channelId = await this.getChannelId(channelPoint);
@@ -358,7 +356,7 @@ class Dlsp {
                             logger.info('Channel opening results: ' + 'channelId: ' + channelId + ' ' + JSON.stringify(channelOpeningResult));
 
                             // Channel got opened --> exit
-                            this.pendingChannelIndexes = this.pendingChannelIndexes.filter(item => item !== channelIndex.toString());
+                            this.pendingChannelIndexes.delete(channelIndex.toString());
                         }
 
                         // Consensus was not reached, request for more signatures.
@@ -373,11 +371,14 @@ class Dlsp {
                     } else {
                         logger.warn('No such channel info found YET: ' + channelId);
                     }
+                } else {
+                    logger.warn('No such channel info found YET');
                 }
             }
         } catch (e) {
-            await this._handleFailedChannelAttempts(channelIndex);
-            if (e.message.includes('edge not found') || e.message.includes('zombie')) {
+            if (e.message.includes('edge not found') || e.message.includes('zombie') ||
+                e.message.includes('No such mempool or blockchain transaction')) {
+                await this._handleFailedChannelAttempts(channelIndex);
                 logger.debug('ChannelInfoFailed: ' + e.message);
             } else {
                 logger.error('Error: ' + e.message);
@@ -385,12 +386,12 @@ class Dlsp {
         }
     }
 
-    async openChannelRequested(capacityRequestIndex, channelPoint) {
+    async openChannelRequested(channelPoint, capacityRequestIndex) {
         try {
             const account = this.accounts[0];
             const txCount = await this.web3.eth.getTransactionCount(account);
-            logger.debug('openChannelRequested nonce: ' + txCount);
-            await this.ocean.openChannelRequested(channelPoint.toString(), capacityRequestIndex, {
+            logger.debug('openChannelRequested: ' + capacityRequestIndex + ' : ' + channelPoint);
+            await this.ocean.openChannelRequested(channelPoint, capacityRequestIndex, {
                 from: account,
                 nonce: this.web3.utils.toHex(txCount)
             });
@@ -399,7 +400,6 @@ class Dlsp {
             throw e;
         }
     }
-
 
     /* **************************************************************
      *                       ACTIVE CHANNELS                        *
@@ -410,7 +410,7 @@ class Dlsp {
         if (this.escrowWs) {
             this.escrowWs.LightningChannelOpeningConfirmed().on('data', event => {
                 const channelIndex = event.returnValues.channelIndex;
-                this._pushIfNotExists(this.activeChannelIndexes, channelIndex.toString());
+                this.activeChannelIndexes.add(channelIndex.toString());
             });
         }
     }
@@ -422,12 +422,12 @@ class Dlsp {
 
             for (let j = 1; j <= channelCount; j++) {
                 const req = await this.coordinator.channels(j, {from: account});
-                if (req.status == 1) {
-                    this._pushIfNotExists(this.activeChannelIndexes, String(j));
+                if (Number(req.status) === 1) {
+                    this.activeChannelIndexes.add(String(j));
                 }
             }
 
-            logger.info("Active channel indexes: " + this.activeChannelIndexes);
+            logger.info("Active channel indexes: " + [...this.activeChannelIndexes]);
         } catch (err) {
             logger.error("getActiveChannels failed: " + err);
             return (err);
@@ -442,14 +442,14 @@ class Dlsp {
             const answered = await this.oracleValidator.oracleCloseChannelAnswers(channelIndex, account, {from: account});
             if (answered) {
                 logger.error('Already answered');
-                this.activeChannelIndexes = this.activeChannelIndexes.filter(item => item !== channelIndex.toString());
+                this.activeChannelIndexes.delete(channelIndex.toString());
             }
 
             // if channel is already closed --> exit
             const channel = await this.coordinator.channels(channelIndex);
             if (Number(channel.status) === 2) {
                 logger.error('Channel already closed');
-                this.activeChannelIndexes = this.activeChannelIndexes.filter(item => item !== channelIndex.toString());
+                this.activeChannelIndexes.delete(channelIndex.toString());
             }
 
             // parse the channel point
@@ -553,7 +553,7 @@ class Dlsp {
                 logger.info('Channel closing result:' + 'channelIndex: ' + channelIndex + ' ' + JSON.stringify(channelClosingResult));
 
                 // Channel got closed --> exit
-                this.activeChannelIndexes = this.activeChannelIndexes.filter(item => item !== channelIndex.toString());
+                this.activeChannelIndexes.delete(channelIndex.toString());
             }
 
             // Consensus was not reached, request for more signatures.
@@ -620,37 +620,45 @@ class Dlsp {
                 const makerAddress = event.returnValues.makerAddress;
 
                 // check if makerAddress == dapp adddress
-                if (this.web3.utils.toChecksumAddress(this.accounts[0]) == makerAddress) {
+                if (makerAddress === this.web3.utils.toChecksumAddress(this.accounts[0])) {
                     logger.info('New Capacity Request Received');
-                    this._pushIfNotExists(this.pendingCapacityIndexes, capacityRequestIndex.toString());
+                    this.pendingCapacityIndexes.add(capacityRequestIndex.toString());
                 }
             });
         }
     }
 
     async getPendingCapacityRequests() {
-        logger.info('getPendingCapacityRequests');
 
         try {
             const account = this.accounts[0];
-            const capacityRequestCounts = await this.ocean.capacityRequestsCount({from: account});
+            const [capacityRequestCounts, currentBlock, expirePeriod] = await Promise.all([
+                this.ocean.capacityRequestsCount({from: account}),
+                this.web3L1.eth.getBlockNumber(),
+                this.ocean.cancelingRequestPeriod()
+            ]);
 
             for (let j = 1; j <= capacityRequestCounts; j++) {
                 const req = await this.ocean.capacityRequests(j, {from: account});
-                if (req.makerAddress == this.web3.utils.toChecksumAddress(account) && req.status == 0) {
-                    this._pushIfNotExists(this.pendingCapacityIndexes, String(j));
+                if (req.makerAddress === this.web3.utils.toChecksumAddress(account) &&
+                    Number(req.status) === 0 &&
+                    ((Number(currentBlock) - Number(req.addedDate)) < Number(expirePeriod))
+                ) {
+                    this.pendingCapacityIndexes.add(String(j));
+                } else {
+                    this.pendingCapacityIndexes.delete(String(j));
                 }
             }
 
-            logger.info("Pending capacity indexes: " + this.pendingCapacityIndexes);
+            logger.info("Pending capacity indexes: " + [...this.pendingCapacityIndexes]);
         } catch (err) {
             logger.error('getPendingCapacityRequests failed: ' + err);
         }
     }
 
     async processPendingCapacityRequest(capacityRequestIndex) {
+        const walletBalance = await lnd.getWalletBalance();
         const capacityRequest = await this.ocean.capacityRequests(capacityRequestIndex);
-
         const nodeUrl = capacityRequest.nodeUrl;
         const capacity = parseInt(capacityRequest.capacity);
 
@@ -658,77 +666,52 @@ class Dlsp {
         const status = capacityRequest.status;
         if (status > 0) {
             logger.error('Invalid capacity request: ' + capacityRequest);
-            this.pendingCapacityIndexes = this.pendingCapacityIndexes.filter(item => item !== capacityRequestIndex.toString());
+            this.pendingCapacityIndexes.delete(capacityRequestIndex.toString());
         }
 
-        let savedChannelPoint;
         // check if the channel point was already saved
+        let savedChannelPoint;
         try {
             logger.debug('Getting pending capacity requests from DB');
-            savedChannelPoint = await db.get(capacityRequestIndex);
+            savedChannelPoint = await db.get(`capacity_${capacityRequestIndex}`);
         } catch (e) {
             // ignore
         }
 
-        if (savedChannelPoint) {
-            try {
-                await this.openChannelRequested(capacityRequestIndex, savedChannelPoint);
-                this.pendingCapacityIndexes = this.pendingCapacityIndexes.filter(item => item !== capacityRequestIndex.toString());
-            } catch (e) {
-                logger.error(e);
-                throw e;
+        if (Number(walletBalance.confirmed_balance) > Number(capacity)) {
+            if (savedChannelPoint) {
+                await this.openChannelRequested(savedChannelPoint, capacityRequestIndex);
+                this.pendingCapacityIndexes.delete(capacityRequestIndex.toString());
+            } else {
+                // open channel
+                let call = lnd.openChannel(nodeUrl, capacity);
+                call.on('error', err => logger.error('Error opening channel: ' + err));
+                call.on('data', async (response) => {
+                    logger.info('DATA: ' + this._logObject(response));
+
+                    if (response.chan_open) {
+                        const fundingTxId = response.chan_open.channel_point.funding_txid_bytes.reverse().toString('hex');
+                        const outputIndex = response.chan_open.channel_point.output_index;
+                        const channelPoint = fundingTxId + ":" + outputIndex;
+
+                        logger.info('channelPoint:' + channelPoint);
+                        db.put(`capacity_${capacityRequestIndex}`, channelPoint);
+
+                        await this.openChannelRequested(channelPoint, capacityRequestIndex);
+                        this.pendingCapacityIndexes.delete(capacityRequestIndex.toString());
+                    }
+                });
             }
         }
-
-        let call = lnd.openChannel(nodeUrl, capacity);
-        // open channel
-        await new Promise((resolve, reject) => {
-            call.on('data', function (response) {
-                // A response was received from the server.
-                logger.info('DATA ' + this._logObject(response));
-
-                if (response.chan_pending) {
-                    // save the channel point in db
-                    const fundingTxId = response.chan_pending.txid.reverse().toString('hex');
-                    const outputIndex = response.chan_pending.output_index;
-                    const channelPoint = fundingTxId + ":" + outputIndex;
-
-                    // save the entry
-                    logger.info('channelPoint:', channelPoint);
-                    // save the channelPoint
-                    db.put(capacityRequestIndex, channelPoint);
-
-                    this.openChannelRequested(capacityRequestIndex, channelPoint).then(function (channel) {
-                        db.del(capacityRequestIndex);
-                        resolve(channel);
-                    }.bind(this)).catch(function (err) {
-                        logger.error(err);
-                        reject(err);
-                    });
-                }
-            }.bind(this));
-            call.on('status', function (status) {
-                // The current status of the stream.;
-            });
-            call.on('error', function (err) {
-                // Error in stream
-                logger.error('ERROR: ' + err);
-                reject(err);
-            });
-            call.on('end', function () {
-                // The server has closed the stream.
-            });
-        });
-        this.pendingCapacityIndexes = this.pendingCapacityIndexes.filter(item => item !== capacityRequestIndex.toString());
     }
 
 
-    // TODO: Refactor - implement message queue
     /* **************************************************************
      *                       LOOP NODES & CHANNELS                  *
      ************************************************************** */
 
-    processChannels(channels, executor, delay) {
+    processChannels(dataSet, executor, delay) {
+        const channels = Array.from(dataSet);
         for (let i = 0; i < channels.length; i++) {
             (function (ind) {
                 setTimeout(async function () {
@@ -925,7 +908,21 @@ class Dlsp {
         return validatorsList;
     }
 
-    // Utils
+    // Channels
+    async _handleFailedChannelAttempts(channelIndex) {
+        let failedChannelAttempts = 1;
+
+        try {
+            failedChannelAttempts = await db.get(`failed_channel_attempts_${channelIndex}`);
+        } catch (e) {
+            // ignore
+        }
+
+        logger.debug(`Failed attempts count ${failedChannelAttempts} for channel with index ${channelIndex}`);
+        db.put(`failed_channel_attempts_${channelIndex}`, ++failedChannelAttempts);
+    }
+
+    // Logger
     _logObject(obj, prefix = "") {
         for (let key in obj) {
             let value = obj[key];
@@ -936,24 +933,6 @@ class Dlsp {
         return prefix;
     };
 
-    async _handleFailedChannelAttempts(channelIndex) {
-        let failedChannelAttempts = 0;
-
-        try {
-            failedChannelAttempts = await db.get(`failedAttempt_${channelIndex}`);
-        } catch (e) {
-            // ignore
-        }
-
-        logger.debug('Failed attempt count: ' + failedChannelAttempts);
-        db.put(`failedAttempt_${channelIndex}`, ++failedChannelAttempts);
-    }
-
-    _pushIfNotExists(arr, value) {
-        if (!arr.includes(value)) {
-            arr.push(value);
-        }
-    }
 }
 
 module.exports = new Dlsp();

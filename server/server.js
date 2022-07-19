@@ -9,8 +9,9 @@ const express = require('express');
 const compression = require('compression');
 const contract = require("truffle-contract");
 const HDWalletProvider = require('truffle-hdwallet-provider');
-const { createAlchemyWeb3 } = require("@alch/alchemy-web3");
+const {createAlchemyWeb3} = require("@alch/alchemy-web3");
 
+// TEST
 // Import custom modules
 const lnd = require('./lnd');
 const btc = require('./btc');
@@ -28,7 +29,12 @@ const RETRY_JITTER = process.env.RETRY_JITTER ? process.env.RETRY_JITTER : 250;
 // Instantiate web3 provider
 const privateKeyProvider = new HDWalletProvider(process.env.ETH_PRIV_KEY, process.env.LOCAL_RPC_URL);
 const web3 = createAlchemyWeb3(process.env.LOCAL_RPC_URL,
-    { writeProvider: privateKeyProvider, maxRetries: MAX_RETRIES, retryInterval: RETRY_INTERVAL, retryJitter: RETRY_JITTER });
+    {
+        writeProvider: privateKeyProvider,
+        maxRetries: MAX_RETRIES,
+        retryInterval: RETRY_INTERVAL,
+        retryJitter: RETRY_JITTER
+    });
 
 // https options use with valid certificate
 const options = {
@@ -114,7 +120,7 @@ app.post('/relayChannelOpening', async (req, res, next) => {
 
         // first check if the lnd has enough capacity to process the request
         const walletBalance = await lnd.getWalletBalance();
-        if (walletBalance.total_balance < capacity) {
+        if (Number(walletBalance.confirmed_balance) < Number(capacity)) {
             logger.error("Maker's LND has not enough wallet balance.");
             return res.status(400).json({message: "Maker's LND has not enough wallet balance."});
         }
